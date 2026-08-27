@@ -19,6 +19,3 @@ __pycache__/
 # Systémové soubory
 .DS_Store
 Thumbs.db
-
-# Interní zadání, do repozitáře nepatří
-zadani.md
