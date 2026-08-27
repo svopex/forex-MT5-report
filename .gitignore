@@ -1,0 +1,24 @@
+# Virtuální prostředí Pythonu (vytvoří ho startovací skripty)
+.venv/
+venv/
+env/
+
+# Přeložené soubory a mezivýsledky Pythonu
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Vygenerované reporty
+*.pdf
+*.png
+
+# Nastavení Claude Code
+.claude/
+
+# Systémové soubory
+.DS_Store
+Thumbs.db
+
+# Interní zadání, do repozitáře nepatří
+zadani.md
