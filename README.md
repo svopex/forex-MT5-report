@@ -105,6 +105,7 @@ python report.py ReportHistory-498754.xlsx --year=2026
 python report.py --month=last ReportHistory-498754.xlsx
 python report.py --week=20260825 -o tyden.pdf ReportHistory-498754.xlsx
 python report.py ReportHistory-498754.xlsx --day=last -q
+python report.py ReportHistory-498754.xlsx --from=20260801
 
 python report.py ReportHistory-498754.xlsx month=202608     # zápis bez pomlček
 ```
@@ -146,6 +147,8 @@ při `--format both` zůstanou oba soubory.
 | `--week=last` | `week=last` | poslední týden s obchodní aktivitou |
 | `--day=20260825` | `day=20260825` | jeden den ve tvaru `RRRRMMDD` |
 | `--day=last` | `day=last` | poslední den s obchodní aktivitou |
+| `--from=20260825` | `from=20260825` | od zadaného dne `RRRRMMDD` do posledního obchodu v souboru |
+| `--from=last` | `from=last` | od posledního dne s obchodní aktivitou |
 
 Hodnota `last` se vždy vztahuje k **datům v souboru**, nikoli k systémovému
 datu – `day=last` tedy znamená poslední den, kdy byl uzavřen nějaký obchod.
@@ -206,8 +209,8 @@ symbolů a směru – histogram ani dny v týdnu pro jediný den nedávají smys
 
 ### Strana 4 a dále – Seznam obchodů
 
-Kompletní tabulka uzavřených pozic (čas otevření a uzavření, symbol, směr,
-objem, ceny, provize, swap, hrubý zisk a čistý výsledek).
+Kompletní tabulka uzavřených pozic (čas otevření a uzavření včetně vteřin,
+symbol, směr, objem, ceny, provize, swap, hrubý zisk a čistý výsledek).
 
 ---
 

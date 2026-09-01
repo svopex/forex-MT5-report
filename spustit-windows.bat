@@ -156,6 +156,9 @@ if /i "!ARG:~0,7!"=="--year=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,8!"=="--month=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,7!"=="--week=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,6!"=="--day=" set "MA_OBDOBI=1"
+if /i "!ARG!"=="--from" set "MA_OBDOBI=1"
+if /i "!ARG:~0,7!"=="--from=" set "MA_OBDOBI=1"
+if /i "!ARG:~0,5!"=="from=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,5!"=="year=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,6!"=="month=" set "MA_OBDOBI=1"
 if /i "!ARG:~0,5!"=="week=" set "MA_OBDOBI=1"
@@ -205,7 +208,8 @@ echo   2^) --year=last   posledni rok
 echo   3^) --month=last  posledni mesic
 echo   4^) --week=last   posledni tyden
 echo   5^) --day=last    posledni den
-echo   6^) vlastni zadani ^(napr. --month=202608^)
+echo   6^) --from=...    od zadaneho dne do konce dat
+echo   7^) vlastni zadani ^(napr. --month=202608^)
 set /p VOLBA_O="Cislo [1]: "
 if "!VOLBA_O!"=="" set "VOLBA_O=1"
 set "OBDOBI=--all"
@@ -213,7 +217,12 @@ if "!VOLBA_O!"=="2" set "OBDOBI=--year=last"
 if "!VOLBA_O!"=="3" set "OBDOBI=--month=last"
 if "!VOLBA_O!"=="4" set "OBDOBI=--week=last"
 if "!VOLBA_O!"=="5" set "OBDOBI=--day=last"
-if "!VOLBA_O!"=="6" set /p OBDOBI="Zadejte obdobi: "
+rem Volba 6 se pta jen na datum, prepinac doplnime sami; prazdna hodnota = cele obdobi
+if "!VOLBA_O!"=="6" (
+    set /p DATUM_OD="Datum od (RRRRMMDD): "
+    if not "!DATUM_OD!"=="" set "OBDOBI=--from=!DATUM_OD!"
+)
+if "!VOLBA_O!"=="7" set /p OBDOBI="Zadejte obdobi: "
 rem Vlastni zadani muze obsahovat mezery, proto uvozovky
 set OBDOBI="!OBDOBI!"
 goto :eof

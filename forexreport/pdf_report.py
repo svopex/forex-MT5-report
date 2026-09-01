@@ -712,7 +712,8 @@ class ReportPdf:
 
     TRADE_HEADERS = ["#", "Otevřeno", "Uzavřeno", "Symbol", "Směr", "Objem",
                      "Otevírací cena", "Zavírací cena", "Provize", "Swap", "Zisk", "Výsledek"]
-    TRADE_WEIGHTS = [0.035, 0.115, 0.115, 0.075, 0.055, 0.055,
+    # Sloupce "Otevřeno" a "Uzavřeno" jsou širší kvůli času včetně vteřin
+    TRADE_WEIGHTS = [0.035, 0.128, 0.128, 0.075, 0.055, 0.055,
                      0.095, 0.095, 0.065, 0.06, 0.095, 0.09]
     TRADE_ALIGNS = ["right", "left", "left", "left", "left", "right",
                     "right", "right", "right", "right", "right", "right"]
@@ -729,8 +730,8 @@ class ReportPdf:
             net = position.net_profit
             rows.append([
                 (str(offset), None),
-                (datetime_cs(position.open_time), None),
-                (datetime_cs(position.close_time), None),
+                (datetime_cs(position.open_time, with_seconds=True), None),
+                (datetime_cs(position.close_time, with_seconds=True), None),
                 (position.symbol, None),
                 ("Dlouhá" if position.direction == "buy" else "Krátká", None),
                 (cs_number(position.volume, 2), None),

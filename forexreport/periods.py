@@ -1,5 +1,6 @@
 """
-Rozbor a vyhodnocení parametru období (`all`, `year=`, `month=`, `week=`, `day=`).
+Rozbor a vyhodnocení parametru období (`all`, `year=`, `month=`, `week=`, `day=`,
+`from=`).
 
 Období se vždy vyhodnocuje vůči datům v souboru, nikoli vůči systémovému datu –
 hodnota `last` proto znamená poslední období, ve kterém proběhl nějaký obchod.
@@ -15,7 +16,7 @@ from typing import List, Optional, Sequence
 
 
 # Podporované druhy období
-PERIOD_KINDS = ("all", "year", "month", "week", "day")
+PERIOD_KINDS = ("all", "year", "month", "week", "day", "from")
 
 # Nápověda zobrazovaná při chybném zadání
 PERIOD_HELP = """Podporované hodnoty parametru období:
@@ -27,7 +28,9 @@ PERIOD_HELP = """Podporované hodnoty parametru období:
   week=20260825    týden (pondělí-neděle), do kterého spadá zadaný den RRRRMMDD
   week=last        poslední týden s obchodní aktivitou
   day=20260825     jeden den ve tvaru RRRRMMDD
-  day=last         poslední den s obchodní aktivitou"""
+  day=last         poslední den s obchodní aktivitou
+  from=20260825    od zadaného dne RRRRMMDD do posledního obchodu v souboru
+  from=last        od posledního dne s obchodní aktivitou"""
 
 
 class PeriodError(ValueError):
@@ -111,9 +114,10 @@ def parse_period(raw: str) -> PeriodSpec:
         raise PeriodError(f"Chybí hodnota u parametru '{kind}'.\n" + PERIOD_HELP)
 
     if value != "last":
-        expected = {"year": 4, "month": 6, "week": 8, "day": 8}[kind]
+        expected = {"year": 4, "month": 6, "week": 8, "day": 8, "from": 8}[kind]
         if not re.fullmatch(rf"\d{{{expected}}}", value):
-            hint = {"year": "RRRR", "month": "RRRRMM", "week": "RRRRMMDD", "day": "RRRRMMDD"}[kind]
+            hint = {"year": "RRRR", "month": "RRRRMM", "week": "RRRRMMDD",
+                    "day": "RRRRMMDD", "from": "RRRRMMDD"}[kind]
             raise PeriodError(
                 f"Hodnota '{value}' u parametru '{kind}' nemá očekávaný tvar {hint}.\n"
                 + PERIOD_HELP
@@ -123,7 +127,7 @@ def parse_period(raw: str) -> PeriodSpec:
             month = int(value[4:])
             if not 1 <= month <= 12:
                 raise PeriodError(f"Měsíc '{value[4:]}' není platný (očekává se 01–12).")
-        elif kind in ("week", "day"):
+        elif kind in ("week", "day", "from"):
             _parse_day_value(value)
     return PeriodSpec(kind, value)
 
@@ -209,6 +213,19 @@ def resolve_period(spec: PeriodSpec, timestamps: Sequence[datetime]) -> Period:
             start, end, "week",
             f"{iso_week}. týden {iso_year} · {_fmt(monday)} – {_fmt(sunday)}",
             f"tyden-{iso_year}W{iso_week:02d}",
+        )
+
+    if spec.kind == "from":
+        # Otevřený interval od zadaného dne po poslední obchod v souboru;
+        # když je zadané datum až za posledním obchodem, období zůstane prázdné
+        begin = last.date() if spec.value == "last" else _parse_day_value(spec.value)
+        finish = max(begin, last.date())
+        start, _ = _day_bounds(begin)
+        _, end = _day_bounds(finish)
+        return Period(
+            start, end, "from",
+            f"Od {_fmt(begin)} do {_fmt(finish)}",
+            f"od-{begin.strftime('%Y%m%d')}",
         )
 
     # spec.kind == "day"

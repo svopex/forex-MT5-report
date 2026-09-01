@@ -122,7 +122,8 @@ has_period_arg() {
     for arg in "$@"; do
         case "$arg" in
             --all|--year|--year=*|--month|--month=*|--week|--week=*|--day|--day=*) return 0 ;;
-            all|year=*|month=*|week=*|day=*) return 0 ;;
+            --from|--from=*) return 0 ;;
+            all|year=*|month=*|week=*|day=*|from=*) return 0 ;;
         esac
     done
     return 1
@@ -188,15 +189,23 @@ ask_period() {
     echo "  3) --month=last  poslední měsíc" >&2
     echo "  4) --week=last   poslední týden" >&2
     echo "  5) --day=last    poslední den" >&2
-    echo "  6) vlastní zadání (např. --month=202608)" >&2
-    local answer custom
+    echo "  6) --from=…      od zadaného dne do konce dat" >&2
+    echo "  7) vlastní zadání (např. --month=202608)" >&2
+    local answer custom since
     read -r -p "Číslo [1]: " answer
     case "${answer:-1}" in
         2) printf '%s' "--year=last" ;;
         3) printf '%s' "--month=last" ;;
         4) printf '%s' "--week=last" ;;
         5) printf '%s' "--day=last" ;;
-        6) read -r -p "Zadejte období: " custom; printf '%s' "${custom:---all}" ;;
+        # Datum od zadává uživatel ve tvaru RRRRMMDD, prázdná hodnota vezme celé období
+        6) read -r -p "Datum od (RRRRMMDD): " since
+           if [ -n "$since" ]; then
+               printf '%s' "--from=$since"
+           else
+               printf '%s' "--all"
+           fi ;;
+        7) read -r -p "Zadejte období: " custom; printf '%s' "${custom:---all}" ;;
         *) printf '%s' "--all" ;;
     esac
 }

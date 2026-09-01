@@ -63,6 +63,10 @@ Na pořadí parametrů nezáleží, období lze zadat oběma způsoby:
     period_group.add_argument(
         "--day", metavar="RRRRMMDD|last", help="jeden den, např. --day=20260825",
     )
+    period_group.add_argument(
+        "--from", dest="from_date", metavar="RRRRMMDD|last",
+        help="od zadaného dne do posledního obchodu v souboru, např. --from=20260825",
+    )
     parser.add_argument(
         "-o", "--output", dest="output", default=None,
         help="cesta k výstupnímu souboru (výchozí: odvozeno z názvu vstupu a období); "
@@ -96,8 +100,16 @@ Na pořadí parametrů nezáleží, období lze zadat oběma způsoby:
     return parser
 
 
-# Druhy období, které hledáme mezi přepínači
-_PERIOD_KINDS = ("year", "month", "week", "day")
+# Druhy období, které hledáme mezi přepínači;
+# hodnotou je název atributu, do kterého argparse přepínač uloží
+# ("from" je klíčové slovo Pythonu, proto se ukládá jako from_date)
+_PERIOD_KINDS = {
+    "year": "year",
+    "month": "month",
+    "week": "week",
+    "day": "day",
+    "from": "from_date",
+}
 
 
 def period_from_args(args) -> str:
@@ -112,8 +124,8 @@ def period_from_args(args) -> str:
     selected = []
     if args.all:
         selected.append("all")
-    for kind in _PERIOD_KINDS:
-        value = getattr(args, kind, None)
+    for kind, attribute in _PERIOD_KINDS.items():
+        value = getattr(args, attribute, None)
         if value:
             selected.append(f"{kind}={value}")
     if args.obdobi:

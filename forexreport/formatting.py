@@ -72,13 +72,21 @@ def duration(minutes: Optional[float]) -> str:
     return f"{days}{NBSP}d {hours}{NBSP}h"
 
 
-def datetime_cs(moment, with_time: bool = True) -> str:
-    """Naformátuje datum (a čas) česky, bez úvodních nul u dne a měsíce."""
+def datetime_cs(moment, with_time: bool = True, with_seconds: bool = False) -> str:
+    """
+    Naformátuje datum (a čas) česky, bez úvodních nul u dne a měsíce.
+
+    :param with_time: připojit za datum i čas
+    :param with_seconds: vypsat čas včetně vteřin (jen spolu s `with_time`)
+    """
     if moment is None:
         return "—"
     text = f"{moment.day}.{NBSP}{moment.month}.{NBSP}{moment.year}"
     if with_time and hasattr(moment, "hour"):
         text += f" {moment.hour:02d}:{moment.minute:02d}"
+        # Vteřiny mají smysl jen v seznamu obchodů, jinde by jen rušily
+        if with_seconds:
+            text += f":{moment.second:02d}"
     return text
 
 
