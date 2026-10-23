@@ -70,6 +70,9 @@ class Metrics:
     opening_balance: float = 0.0
     closing_balance: float = 0.0
     peak_balance: float = 0.0
+    # Okamžik, kdy zůstatek naposledy stál na svém maximu (None = maximem je
+    # počáteční zůstatek)
+    peak_time: Optional[datetime] = None
 
     # Rozšířené ukazatele
     largest_win: float = 0.0
@@ -78,6 +81,10 @@ class Metrics:
     avg_loss: float = 0.0
     max_drawdown: float = 0.0
     max_drawdown_pct: float = 0.0
+    # Lokální maximum zůstatku, od kterého se měří maximální pokles, a jeho čas
+    # (None = maximem je počáteční zůstatek)
+    max_drawdown_peak: float = 0.0
+    max_drawdown_peak_time: Optional[datetime] = None
     max_consecutive_wins: int = 0
     max_consecutive_losses: int = 0
     max_consecutive_win_amount: float = 0.0
@@ -145,6 +152,16 @@ class Metrics:
         if self.max_drawdown <= 0:
             return None
         return self.net_profit / self.max_drawdown
+
+    @property
+    def current_drawdown(self) -> float:
+        """
+        Pokles zůstatku po posledním obchodu od nejvyššího dosaženého zůstatku.
+
+        Zaokrouhluje se na haléře, aby zbytky součtu v plovoucí čárce
+        nevypadaly jako pokles.
+        """
+        return round(self.peak_balance - self.closing_balance, 2)
 
     @property
     def is_empty(self) -> bool:
@@ -352,20 +369,32 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     durations = [p.duration_minutes for p in selected if p.duration_minutes is not None]
     metrics.avg_duration_minutes = statistics.fmean(durations) if durations else None
 
-    # Křivka zůstatku a pokles od lokálního maxima
+    # Křivka zůstatku a pokles od lokálního maxima; výchozím maximem je
+    # počáteční zůstatek (čas None)
     balance = opening
     peak = opening
+    peak_time: Optional[datetime] = None
     equity: List[Tuple[datetime, float]] = [(period.start, balance)]
     drawdown: List[Tuple[datetime, float]] = [(period.start, 0.0)]
     max_dd = 0.0
     max_dd_pct = 0.0
+    max_dd_peak = opening
+    max_dd_peak_time: Optional[datetime] = None
     for position in selected:
         balance += position.net_profit
         moment = position.close_time or period.end
-        peak = max(peak, balance)
+        # Při vyrovnání maxima posuneme i jeho čas – pokles začíná až od
+        # posledního okamžiku, kdy zůstatek na maximu stál
+        if balance >= peak:
+            peak = balance
+            peak_time = moment
         dd = peak - balance
         dd_pct = 100.0 * dd / peak if peak else 0.0
-        max_dd = max(max_dd, dd)
+        # Spolu s nejhlubším poklesem si pamatujeme maximum, od kterého vznikl
+        if dd > max_dd:
+            max_dd = dd
+            max_dd_peak = peak
+            max_dd_peak_time = peak_time
         max_dd_pct = max(max_dd_pct, dd_pct)
         equity.append((moment, balance))
         drawdown.append((moment, -dd))
@@ -373,8 +402,11 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     metrics.drawdown_curve = drawdown
     metrics.closing_balance = balance
     metrics.peak_balance = peak
+    metrics.peak_time = peak_time
     metrics.max_drawdown = max_dd
     metrics.max_drawdown_pct = max_dd_pct
+    metrics.max_drawdown_peak = max_dd_peak
+    metrics.max_drawdown_peak_time = max_dd_peak_time
 
     # Denní výnosy pro Sharpeho poměr a nej/nejhorší den
     daily: "OrderedDict[date, float]" = OrderedDict()

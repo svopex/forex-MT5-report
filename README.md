@@ -187,12 +187,16 @@ Návratové kódy: `0` úspěch, `1` chyba při čtení souboru nebo sazbě PDF,
 * **Dlouhé vs. krátké pozice**
 
 U **denního** reportu (`day=…`) nahrazuje tato tři poslední dlaždice rovnou
-**seznam obchodů** – pro jediný den se vejde a je zajímavější než rozpady.
-Rozpady se v takovém případě přesouvají na druhou stranu.
+**seznam obchodů** – pro jediný den je zajímavější než rozpady. Na úvodní
+straně se vypíše nejvýše prvních 10 obchodů, ostatní pokračují v seznamu
+obchodů na dalších stranách. Rozpady se v takovém případě přesouvají na
+druhou stranu.
 
 ### Strana 2 – Analýza výkonnosti
 
-* Pokles zůstatku od lokálního maxima (underwater křivka)
+* Pokles zůstatku od lokálního maxima (underwater křivka) – v popisu je
+  uvedeno, od jakého maxima a kdy maximální pokles vznikl a o kolik je
+  zůstatek na konci křivky pod maximem
 * Rizikový profil (maximální pokles, faktor zotavení, Sharpe, série, extrémy)
 * Rozdělení výsledků obchodů (histogram s hranicemi zarovnanými na nulu)
 * Výsledek podle dne v týdnu

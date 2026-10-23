@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple, Union
 
 from reportlab.lib.colors import HexColor, Color
 from reportlab.lib.pagesizes import A4, landscape
@@ -36,10 +36,24 @@ FOOTER_HEIGHT = 20.0
 TRADE_ROW_HEIGHT = 13.0
 TRADE_CARD_OVERHEAD = 59.0
 
+# Nejvyšší počet obchodů vypsaných na úvodní straně denního reportu;
+# zbývající obchody pokračují na stranách se seznamem obchodů
+OVERVIEW_TRADE_LIMIT = 10
+
 
 def _c(hex_color: str) -> Color:
     """Převede hexadecimální barvu motivu na barvu ReportLabu."""
     return HexColor(hex_color)
+
+
+def _trade_card_height(rows: int) -> float:
+    """
+    Výška karty se seznamem obchodů pro zadaný počet řádků.
+
+    Z výšky karty se zpětně odvozuje, kolik řádků se do ní vejde, proto ji
+    přehled i karta musí počítat stejně.
+    """
+    return TRADE_CARD_OVERHEAD + rows * TRADE_ROW_HEIGHT + 4
 
 
 class ReportPdf:
@@ -153,10 +167,13 @@ class ReportPdf:
         c.drawRightString(PAGE_WIDTH - MARGIN, FOOTER_HEIGHT - 4, f"Strana {self.page_number}")
 
     def _card(self, x: float, y: float, width: float, height: float,
-              title: str = "", subtitle: str = "") -> Tuple[float, float, float, float]:
+              title: str = "",
+              subtitle: Union[str, Sequence[str]] = "") -> Tuple[float, float, float, float]:
         """
         Vykreslí bílou kartu s volitelným titulkem a vrátí její vnitřní plochu.
 
+        :param subtitle: podtitulek, nebo jeho varianty od nejpodrobnější;
+            vykreslí se první, která se vejde do šířky karty
         :return: (x, y, šířka, výška) prostoru pro obsah karty
         """
         c = self.canvas
@@ -175,7 +192,9 @@ class ReportPdf:
             if subtitle:
                 c.setFillColor(_c(theme.INK_MUTED))
                 c.setFont(theme.FONT_REGULAR, 6.8)
-                c.drawString(x + padding, content_top - 6, subtitle)
+                variants = [subtitle] if isinstance(subtitle, str) else subtitle
+                c.drawString(x + padding, content_top - 6,
+                             self._fit(variants, theme.FONT_REGULAR, 6.8, width - 2 * padding))
                 content_top -= 10
             content_top -= 2
         return (x + padding, y + padding, width - 2 * padding, content_top - (y + padding))
@@ -223,7 +242,7 @@ class ReportPdf:
 
     def _chart_card(self, x: float, y: float, width: float, height: float,
                     title: str, render: Callable[[Tuple[float, float]], bytes],
-                    subtitle: str = "") -> None:
+                    subtitle: Union[str, Sequence[str]] = "") -> None:
         """
         Vykreslí kartu s grafem.
 
@@ -278,6 +297,20 @@ class ReportPdf:
             result = result[:-1]
         return result + ellipsis
 
+    def _fit(self, variants: Sequence[str], font: str, size: float, max_width: float) -> str:
+        """
+        Vybere první variantu textu, která se vejde do zadané šířky.
+
+        Když se nevejde žádná, zkrátí poslední (nejstručnější) výpustkou, aby
+        text nepřetekl přes okraj.
+
+        :param variants: varianty textu od nejpodrobnější po nejstručnější
+        """
+        for text in variants:
+            if self.canvas.stringWidth(text, font, size) <= max_width:
+                return text
+        return self._clip(variants[-1], font, size, max_width)
+
     def _tracked(self, x: float, y: float, text: str, size: float,
                  spacing: float = 1.1, right: bool = False) -> None:
         """
@@ -317,7 +350,8 @@ class ReportPdf:
         Vykreslí úvodní dashboard – vše podstatné na jedné obrazovce.
 
         U denního reportu se místo tří doplňkových grafů vypíše rovnou seznam
-        obchodů; ty se pro jediný den vejdou a jsou zajímavější než rozpady.
+        obchodů (nejvýše OVERVIEW_TRADE_LIMIT); pro jediný den jsou
+        zajímavější než rozpady.
 
         :return: počet obchodů vypsaných na této straně (0, pokud žádné)
         """
@@ -344,9 +378,11 @@ class ReportPdf:
         middle_top = kpi_y - GUTTER
         daily = m.period.kind == "day"
         if daily:
-            # Spodní pás dostane jen tolik místa, kolik seznam obchodů potřebuje
-            needed = TRADE_CARD_OVERHEAD + len(m.positions) * TRADE_ROW_HEIGHT + 4
-            lower_height = max(120.0, min(300.0, needed))
+            # Spodní pás dostane jen tolik místa, kolik seznam obchodů potřebuje;
+            # počet řádků je omezen, aby zbylo místo pro křivku zůstatku
+            # (z výšky karty se odvodí i počet vypsaných obchodů)
+            listed = min(len(m.positions), OVERVIEW_TRADE_LIMIT)
+            lower_height = max(120.0, _trade_card_height(listed))
         else:
             lower_height = 178.0
         middle_height = middle_top - bottom - GUTTER - lower_height
@@ -503,8 +539,7 @@ class ReportPdf:
             MARGIN, upper_y, drawdown_width, upper_height,
             "Pokles zůstatku od lokálního maxima",
             lambda size: charts.drawdown_chart(m, size),
-            subtitle=f"Maximální pokles {money(m.max_drawdown, self.currency)} "
-                     f"({percent(m.max_drawdown_pct, 2)}) · faktor zotavení {ratio(m.recovery_factor)}",
+            subtitle=self._drawdown_subtitle(),
         )
 
         inner = self._card(MARGIN + drawdown_width + GUTTER, upper_y, risk_width,
@@ -550,6 +585,56 @@ class ReportPdf:
             "Nejlepší a nejhorší obchody",
             lambda size: charts.top_trades_chart(m, size),
         )
+
+    def _peak_label(self, value: float, moment: Optional[datetime],
+                    instrumental: bool = False, with_moment: bool = True) -> str:
+        """
+        Popíše lokální maximum zůstatku pro podtitulek grafu poklesu.
+
+        :param value: výše maxima
+        :param moment: kdy zůstatek na maximu stál; None znamená, že maximem
+            je počáteční zůstatek
+        :param instrumental: sedmý pád („pod maximem“) místo druhého („od maxima“)
+        :param with_moment: připojit datum a čas maxima
+        """
+        amount = money(value, self.currency)
+        if moment is None:
+            noun = "počátečním zůstatkem" if instrumental else "počátečního zůstatku"
+            return f"{noun} {amount}"
+        noun = "maximem" if instrumental else "maxima"
+        if not with_moment:
+            return f"{noun} {amount}"
+        return f"{noun} {amount} z {datetime_cs(moment)}"
+
+    def _drawdown_subtitle(self) -> List[str]:
+        """
+        Podtitulek grafu poklesu: maximální pokles včetně lokálního maxima,
+        od kterého vznikl, a pokles na konci křivky.
+
+        Faktor zotavení se sem už nevejde; je uveden v sousední kartě
+        „Rizikový profil“.
+
+        :return: varianty podtitulku od nejpodrobnější; karta vykreslí první,
+            která se do ní vejde
+        """
+        m = self.metrics
+        head = (f"Maximální pokles {money(m.max_drawdown, self.currency)} "
+                f"({percent(m.max_drawdown_pct, 2)})")
+        if m.max_drawdown > 0:
+            head += " od " + self._peak_label(m.max_drawdown_peak, m.max_drawdown_peak_time)
+
+        # Křivka končí na maximu – stačí údaj o maximálním poklesu
+        if m.current_drawdown <= 0:
+            return [head]
+        tail = f"{head} · na konci {money(m.current_drawdown, self.currency)} pod "
+        if m.peak_time == m.max_drawdown_peak_time:
+            return [tail + "ním"]
+
+        # Konec křivky se měří od jiného, pozdějšího maxima; kratší varianta
+        # pro úzkou kartu vynechá jeho datum a čas
+        return [tail + self._peak_label(m.peak_balance, m.peak_time, instrumental=True),
+                tail + self._peak_label(m.peak_balance, m.peak_time, instrumental=True,
+                                        with_moment=False)]
 
     def _risk_stats(self) -> List[Tuple[str, str, Optional[str]]]:
         """Ukazatele rizika zobrazené vedle křivky poklesu."""
@@ -759,8 +844,7 @@ class ReportPdf:
         if not chunk:
             return 0
 
-        card_height = min(height,
-                          TRADE_CARD_OVERHEAD + len(chunk) * TRADE_ROW_HEIGHT + 4)
+        card_height = min(height, _trade_card_height(len(chunk)))
         inner = self._card(
             x, y + height - card_height, width, card_height,
             "Uzavřené pozice",
