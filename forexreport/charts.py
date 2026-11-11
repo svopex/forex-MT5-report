@@ -21,7 +21,9 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from . import theme
 from .formatting import cs_number, plural
-from .metrics import Metrics
+from .metrics import GroupStats, Metrics, StrategyMetrics
+from .mt5_parser import Position
+from .periods import Period
 
 
 # Výchozí rozlišení rastru vkládaného do PDF
@@ -176,33 +178,48 @@ def _date_locator(ax, period_kind: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6)) -> bytes:
+def _signed_money(value: float, currency: str = "", decimals: Optional[int] = 2) -> str:
+    """Jako _fmt_money, ale kladné hodnoty dostanou znaménko plus."""
+    text = _fmt_money(value, currency, decimals)
+    return f"+{text}" if round(value, 2) > 0 else text
+
+
+def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
+                 relative: bool = False) -> bytes:
     """
     Vývoj zůstatku účtu v čase.
 
     Zůstatek se mění skokově při uzavření obchodu, proto schodová křivka.
+
+    :param relative: místo zůstatku vykreslit kumulativní výsledek od nuly
+        (používá se u strategie, kde zůstatek účtu nemá smysl)
     """
     fig, ax = plt.subplots(figsize=size, layout="constrained")
     times = [t for t, _ in metrics.equity_curve]
-    values = [v for _, v in metrics.equity_curve]
+    # V relativním režimu odečteme počáteční zůstatek, křivka pak začíná na nule
+    reference = 0.0 if relative else metrics.opening_balance
+    shift = metrics.opening_balance if relative else 0.0
+    values = [v - shift for _, v in metrics.equity_curve]
 
     # Poslední bod protáhneme do konce období, aby křivka nekončila "ve vzduchu"
     if times and times[-1] < metrics.period.end:
         times = times + [metrics.period.end]
         values = values + [values[-1]]
 
-    ax.fill_between(times, values, metrics.opening_balance,
+    ax.fill_between(times, values, reference,
                     step="post", color=theme.ACCENT, alpha=0.10, linewidth=0, zorder=1)
     ax.plot(times, values, drawstyle="steps-post",
-            color=theme.ACCENT, linewidth=1.8, zorder=3, label="Zůstatek")
-    # Referenční linie počátečního zůstatku
-    ax.axhline(metrics.opening_balance, color=theme.AXIS, linewidth=0.9, zorder=2)
+            color=theme.ACCENT, linewidth=1.8, zorder=3,
+            label="Výsledek" if relative else "Zůstatek")
+    # Referenční linie počátečního zůstatku (v relativním režimu nuly)
+    ax.axhline(reference, color=theme.AXIS, linewidth=0.9, zorder=2)
 
     # Přímý popisek jen u koncové hodnoty – ostatní nese osa
     if times:
-        end_color = theme.PROFIT_TEXT if values[-1] >= metrics.opening_balance else theme.LOSS_TEXT
+        end_color = theme.PROFIT_TEXT if values[-1] >= reference else theme.LOSS_TEXT
         ax.annotate(
-            _fmt_money(values[-1], metrics.currency),
+            _signed_money(values[-1], metrics.currency) if relative
+            else _fmt_money(values[-1], metrics.currency),
             xy=(times[-1], values[-1]),
             xytext=(-4, 7), textcoords="offset points",
             ha="right", va="bottom", fontsize=8, fontweight="bold", color=end_color,
@@ -212,7 +229,7 @@ def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6)) -> by
     _date_locator(ax, metrics.period.kind)
     ax.yaxis.set_major_formatter(_money_formatter(ax, "y"))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
-    ax.set_ylabel(f"Zůstatek ({metrics.currency})", fontsize=7.5)
+    ax.set_ylabel(f"{'Výsledek' if relative else 'Zůstatek'} ({metrics.currency})", fontsize=7.5)
     ax.margins(x=0.01, y=0.12)
     return _finish(fig)
 
@@ -287,7 +304,27 @@ def bucket_chart(metrics: Metrics, size: Tuple[float, float] = (3.65, 2.2)) -> b
 def symbol_chart(metrics: Metrics, size: Tuple[float, float] = (3.65, 2.2),
                  limit: int = 10) -> bytes:
     """Čistý výsledek podle obchodovaného symbolu (nejvýraznější nahoře)."""
-    groups = sorted(metrics.by_symbol, key=lambda g: abs(g.net), reverse=True)[:limit]
+    return _net_bars_chart(metrics.by_symbol, metrics.currency, size, limit)
+
+
+def strategy_chart(strategies: Sequence[StrategyMetrics], currency: str,
+                   size: Tuple[float, float] = (3.65, 2.2), limit: int = 10) -> bytes:
+    """Čistý výsledek podle strategie (magic number), nejlepší nahoře."""
+    return _net_bars_chart([s.group for s in strategies], currency, size, limit)
+
+
+def _net_bars_chart(source: Sequence[GroupStats], currency: str,
+                    size: Tuple[float, float], limit: int) -> bytes:
+    """
+    Vodorovné sloupce čistého výsledku skupin (symbolů, strategií …).
+
+    Zobrazí se nejvýše `limit` skupin s nejvýraznějším výsledkem; seřazené
+    jsou tak, aby nejlepší skupina byla nahoře.
+
+    :param source: souhrny skupin; popiskem osy je jejich klíč
+    :param currency: měna účtu pro popisek osy
+    """
+    groups = sorted(source, key=lambda g: abs(g.net), reverse=True)[:limit]
     groups = sorted(groups, key=lambda g: g.net)
 
     fig, ax = plt.subplots(figsize=size, layout="constrained")
@@ -315,9 +352,117 @@ def symbol_chart(metrics: Metrics, size: Tuple[float, float] = (3.65, 2.2),
     ax.set_yticklabels(labels, fontsize=7.5, color=theme.INK_SECONDARY)
     ax.xaxis.set_major_formatter(_money_formatter(ax, "x"))
     ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
-    ax.set_xlabel(f"Výsledek ({metrics.currency})", fontsize=7.5)
+    ax.set_xlabel(f"Výsledek ({currency})", fontsize=7.5)
     ax.margins(x=0.22)
     _category_limits(ax, len(groups), minimum=5, horizontal=True)
+    return _finish(fig)
+
+
+# Nejvyšší počet strategií s vlastní barvou v grafu průběhu; kategoriální
+# paleta má jen osm slotů a necykluje se, zbytek se sloučí do "Ostatní"
+MAX_STRATEGY_SERIES = len(theme.SERIES)
+
+
+def _cumulative(positions: Sequence[Position], period: Period) -> Tuple[List, List[float]]:
+    """
+    Kumulativní čistý výsledek obchodů v čase, začínající nulou na začátku období.
+
+    Poslední hodnota se protáhne do konce období, aby křivky všech strategií
+    končily ve stejném místě.
+
+    :return: dvojice (časy, hodnoty)
+    """
+    times: List = [period.start]
+    values: List[float] = [0.0]
+    total = 0.0
+    for position in sorted(positions, key=lambda p: p.close_time or period.end):
+        total += position.net_profit
+        times.append(position.close_time or period.end)
+        values.append(total)
+    if times[-1] < period.end:
+        times.append(period.end)
+        values.append(total)
+    return times, values
+
+
+def _strategy_series(strategies: Sequence[StrategyMetrics],
+                     period: Period) -> List[Tuple[str, str, List, List[float]]]:
+    """
+    Připraví řady pro graf průběhu strategií.
+
+    Barva patří strategii, ne jejímu pořadí podle výsledku: strategie se
+    řadí podle magic number (neznámé na konec) a barvy se přidělují v pevném
+    pořadí palety. Při více strategiích, než má paleta barev, si vlastní
+    barvu ponechají ty s nejvýraznějším výsledkem a ostatní se sloučí do
+    jedné šedé řady "Ostatní".
+
+    :return: seznam čtveřic (popisek, barva, časy, hodnoty)
+    """
+    ordered = sorted(strategies, key=lambda s: (s.magic is None, s.magic or 0))
+    folded: List[StrategyMetrics] = []
+    if len(ordered) > MAX_STRATEGY_SERIES:
+        significant = sorted(ordered, key=lambda s: abs(s.metrics.net_profit), reverse=True)
+        kept = {id(s) for s in significant[:MAX_STRATEGY_SERIES - 1]}
+        folded = [s for s in ordered if id(s) not in kept]
+        ordered = [s for s in ordered if id(s) in kept]
+
+    series = []
+    for index, strategy in enumerate(ordered):
+        times, values = _cumulative(strategy.metrics.positions, period)
+        series.append((strategy.label, theme.SERIES[index], times, values))
+    if folded:
+        merged = [p for s in folded for p in s.metrics.positions]
+        times, values = _cumulative(merged, period)
+        series.append((f"Ostatní ({len(folded)})", theme.INK_MUTED, times, values))
+    return series
+
+
+def strategy_curves_chart(strategies: Sequence[StrategyMetrics], period: Period,
+                          currency: str, size: Tuple[float, float] = (7.6, 2.6)) -> bytes:
+    """
+    Kumulativní výsledek jednotlivých strategií v čase – jedna čára na strategii.
+
+    Legenda je vždy nad grafem; při nejvýše čtyřech strategiích se konečná
+    hodnota vypíše i přímo u konce čáry, pokud se popisky nepřekrývají.
+    """
+    series = _strategy_series(strategies, period)
+    fig, ax = plt.subplots(figsize=size, layout="constrained")
+
+    for label, color, times, values in series:
+        ax.plot(times, values, drawstyle="steps-post", color=color, linewidth=1.6,
+                solid_joinstyle="round", solid_capstyle="round", zorder=3, label=label)
+    ax.axhline(0, color=theme.AXIS, linewidth=0.9, zorder=2)
+
+    _style_axes(ax)
+    _date_locator(ax, period.kind)
+    ax.yaxis.set_major_formatter(_money_formatter(ax, "y"))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.set_ylabel(f"Výsledek ({currency})", fontsize=7.5)
+    ax.margins(x=0.01, y=0.14)
+
+    # Přímé popisky konečných hodnot: jen u malého počtu řad a jen tehdy,
+    # když jsou konce čar dost daleko od sebe (jinak by se popisky slily
+    # a identitu nese legenda)
+    ends = sorted(values[-1] for _, _, _, values in series)
+    low, high = ax.get_ylim()
+    spacing = (high - low) * 0.07
+    apart = all(b - a >= spacing for a, b in zip(ends, ends[1:]))
+    if len(series) <= 4 and apart:
+        left, right = ax.get_xlim()
+        # Vpravo uvolníme místo, aby se popisky vešly za konec čar
+        ax.set_xlim(left, right + (right - left) * 0.11)
+        decimals = _series_decimals(ends)
+        for _, _, times, values in series:
+            ax.annotate(
+                _signed_money(values[-1], decimals=decimals),
+                xy=(times[-1], values[-1]), xytext=(4, 0), textcoords="offset points",
+                ha="left", va="center", fontsize=7.5, fontweight="bold",
+                color=theme.PROFIT_TEXT if values[-1] >= 0 else theme.LOSS_TEXT,
+            )
+
+    # Legenda nad plochou grafu, aby nezakrývala čáry
+    fig.legend(loc="outside upper left", ncol=min(len(series), 5), fontsize=7.5,
+               handlelength=1.6, columnspacing=1.4, labelcolor=theme.INK_SECONDARY)
     return _finish(fig)
 
 

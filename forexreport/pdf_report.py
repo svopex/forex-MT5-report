@@ -21,7 +21,7 @@ from . import charts, theme
 from .formatting import (compact_money, cs_number, datetime_cs, duration,
                          mask_account, money, percent, plural, ratio, rrr,
                          signed_money)
-from .metrics import Metrics
+from .metrics import Metrics, StrategyMetrics
 from .mt5_parser import Mt5Report, Position
 
 # Rozměry stránky (A4 na šířku) a okraje sazby
@@ -39,6 +39,18 @@ TRADE_CARD_OVERHEAD = 59.0
 # Nejvyšší počet obchodů vypsaných na úvodní straně denního reportu;
 # zbývající obchody pokračují na stranách se seznamem obchodů
 OVERVIEW_TRADE_LIMIT = 10
+
+# Strany podle strategie se přidávají až od tohoto počtu strategií v období;
+# u jediné strategie by jen opakovaly report celého účtu
+MIN_STRATEGIES_FOR_PAGES = 2
+
+# Sazba tabulky strategií: nejmenší výška grafů nad ní, místo, které v kartě
+# zaberou odsazení, titulek, podtitulek a hlavička tabulky, a nejmenší výška
+# řádku, na kterou se tabulka smí zhustit
+STRATEGY_CHART_MIN_HEIGHT = 170.0
+STRATEGY_TABLE_OVERHEAD = 63.0
+STRATEGY_ROW_HEIGHT = 15.0
+STRATEGY_ROW_MIN_HEIGHT = 9.0
 
 
 def _c(hex_color: str) -> Color:
@@ -87,6 +99,13 @@ class ReportPdf:
         if not self.metrics.is_empty:
             self._page_performance()
             self._page_details()
+            # Strany podle strategie řadíme před seznam obchodů, který je
+            # přílohou celého reportu
+            strategies = self.metrics.strategies
+            if len(strategies) >= MIN_STRATEGIES_FOR_PAGES:
+                self._page_strategies()
+                for index, strategy in enumerate(strategies, start=1):
+                    self._page_strategy(strategy, index, len(strategies))
             self._pages_trades(start=shown)
 
         self.canvas.save()
@@ -94,12 +113,14 @@ class ReportPdf:
 
     # -- základní stavební prvky --------------------------------------------
 
-    def _new_page(self, title: str, subtitle: str = "") -> float:
+    def _new_page(self, title: str, subtitle: str = "", heading: Optional[str] = None) -> float:
         """
         Založí novou stranu s hlavičkou a vrátí souřadnici y pod hlavičkou.
 
-        :param title: hlavní nadpis v hlavičce
+        :param title: drobný verzálkový nadpis strany v hlavičce
         :param subtitle: doplňkový text vpravo pod obdobím
+        :param heading: velký nadpis místo názvu účtu (např. název strategie);
+            název účtu se pak přesune do řádku s údaji o účtu
         """
         if self.page_number:
             self.canvas.showPage()
@@ -125,12 +146,15 @@ class ReportPdf:
         c.setFillColor(_c(theme.DARK_INK))
         c.setFont(theme.FONT_BOLD, 17)
         name = account.name or "Obchodní účet"
-        c.drawString(MARGIN, top + HEADER_HEIGHT - 42, self._clip(name, theme.FONT_BOLD, 17, 420))
+        c.drawString(MARGIN, top + HEADER_HEIGHT - 42,
+                     self._clip(heading or name, theme.FONT_BOLD, 17, 420))
 
         c.setFillColor(_c(theme.DARK_INK_SECONDARY))
         c.setFont(theme.FONT_REGULAR, 7.5)
-        # Číslo účtu se v reportu zobrazuje zamaskované, aby nebylo čitelné
+        # Číslo účtu se v reportu zobrazuje zamaskované, aby nebylo čitelné.
+        # Nahrazuje-li velký nadpis název účtu, přidáme název sem.
         detail = " · ".join(filter(None, [
+            name if heading else "",
             f"Účet {mask_account(account.account)}" if account.account else "",
             account.company,
         ]))
@@ -365,14 +389,7 @@ class ReportPdf:
         content_width = PAGE_WIDTH - 2 * MARGIN
         bottom = FOOTER_HEIGHT + 14
 
-        # --- řada KPI dlaždic ---
-        kpi_height = 54.0
-        kpis = self._overview_kpis()
-        tile_width = (content_width - GUTTER * (len(kpis) - 1)) / len(kpis)
-        kpi_y = top - kpi_height
-        for index, (label, value, note, color, accent) in enumerate(kpis):
-            self._kpi(MARGIN + index * (tile_width + GUTTER), kpi_y,
-                      tile_width, kpi_height, label, value, note, color, accent)
+        kpi_y = self._kpi_row(m, top)
 
         # --- prostřední pás: křivka zůstatku + souhrn ukazatelů ---
         middle_top = kpi_y - GUTTER
@@ -403,32 +420,64 @@ class ReportPdf:
         self._stat_rows(*inner, self._overview_stats())
 
         # --- spodní pás ---
-        lower_y = bottom
         if daily:
-            return self._trade_table_card(MARGIN, lower_y, content_width, lower_height, start=0)
+            return self._trade_table_card(MARGIN, bottom, content_width, lower_height, start=0)
+        self._breakdown_cards(m, bottom, lower_height)
+        return 0
 
+    def _kpi_row(self, m: Metrics, top: float) -> float:
+        """
+        Vykreslí řadu KPI dlaždic pod hlavičku strany.
+
+        :param m: metriky, ze kterých se dlaždice plní (účet nebo strategie)
+        :param top: horní hrana řady
+        :return: souřadnice y spodní hrany řady
+        """
+        content_width = PAGE_WIDTH - 2 * MARGIN
+        kpi_height = 54.0
+        kpis = self._overview_kpis(m)
+        tile_width = (content_width - GUTTER * (len(kpis) - 1)) / len(kpis)
+        kpi_y = top - kpi_height
+        for index, (label, value, note, color, accent) in enumerate(kpis):
+            self._kpi(MARGIN + index * (tile_width + GUTTER), kpi_y,
+                      tile_width, kpi_height, label, value, note, color, accent)
+        return kpi_y
+
+    def _breakdown_cards(self, m: Metrics, y: float, height: float) -> None:
+        """
+        Vykreslí přes celou šířku trojici rozpadů: po časových úsecích,
+        podle symbolu a podle směru obchodu.
+
+        :param m: metriky, ze kterých se rozpady kreslí (účet nebo strategie)
+        :param y: spodní hrana karet
+        :param height: výška karet
+        """
+        content_width = PAGE_WIDTH - 2 * MARGIN
         third = (content_width - 2 * GUTTER) / 3
         self._chart_card(
-            MARGIN, lower_y, third, lower_height,
+            MARGIN, y, third, height,
             f"Výsledek po úsecích · {m.bucket_label.lower()}",
             lambda size: charts.bucket_chart(m, size),
         )
         self._chart_card(
-            MARGIN + third + GUTTER, lower_y, third, lower_height,
+            MARGIN + third + GUTTER, y, third, height,
             "Výsledek podle symbolu",
             lambda size: charts.symbol_chart(m, size),
             subtitle=f"{plural(len(m.by_symbol), 'obchodovaný symbol', 'obchodované symboly', 'obchodovaných symbolů')}",
         )
         self._chart_card(
-            MARGIN + 2 * (third + GUTTER), lower_y, third, lower_height,
+            MARGIN + 2 * (third + GUTTER), y, third, height,
             "Dlouhé vs. krátké pozice",
             lambda size: charts.direction_chart(m, size),
         )
-        return 0
 
-    def _period_subtitle(self) -> str:
-        """Doplňkový text hlavičky: rozsah skutečné aktivity v období."""
-        m = self.metrics
+    def _period_subtitle(self, m: Optional[Metrics] = None) -> str:
+        """
+        Doplňkový text hlavičky: rozsah skutečné aktivity v období.
+
+        :param m: metriky strategie; bez zadání se použijí metriky celého účtu
+        """
+        m = self.metrics if m is None else m
         if m.is_empty:
             return "bez obchodní aktivity"
         first = min(p.close_time for p in m.positions if p.close_time)
@@ -436,9 +485,13 @@ class ReportPdf:
         return (f"{plural(m.trades, 'obchod', 'obchody', 'obchodů')} · "
                 f"{datetime_cs(first, with_time=False)} – {datetime_cs(last, with_time=False)}")
 
-    def _overview_kpis(self) -> List[Tuple[str, str, str, str, str]]:
-        """Sestaví obsah KPI dlaždic na úvodní straně."""
-        m = self.metrics
+    def _overview_kpis(self, m: Metrics) -> List[Tuple[str, str, str, str, str]]:
+        """
+        Sestaví obsah KPI dlaždic.
+
+        :param m: metriky účtu, nebo strategie (zhodnocení i pokles v % se
+            pak vztahují k zůstatku účtu)
+        """
         profit_color = self._pl_color(m.net_profit)
         return [
             ("Čistý zisk", signed_money(m.net_profit, self.currency),
@@ -550,22 +603,7 @@ class ReportPdf:
         if m.period.kind == "day":
             # Rozdělení výsledků ani dny v týdnu nedávají pro jediný den smysl,
             # proto sem přesouváme rozpady z úvodní strany
-            self._chart_card(
-                MARGIN, bottom, third, lower_height,
-                f"Výsledek po úsecích · {m.bucket_label.lower()}",
-                lambda size: charts.bucket_chart(m, size),
-            )
-            self._chart_card(
-                MARGIN + third + GUTTER, bottom, third, lower_height,
-                "Výsledek podle symbolu",
-                lambda size: charts.symbol_chart(m, size),
-                subtitle=f"{plural(len(m.by_symbol), 'obchodovaný symbol', 'obchodované symboly', 'obchodovaných symbolů')}",
-            )
-            self._chart_card(
-                MARGIN + 2 * (third + GUTTER), bottom, third, lower_height,
-                "Dlouhé vs. krátké pozice",
-                lambda size: charts.direction_chart(m, size),
-            )
+            self._breakdown_cards(m, bottom, lower_height)
             return
 
         self._chart_card(
@@ -791,6 +829,175 @@ class ReportPdf:
         ]
         self._table(x, y, width, height, headers, weights, aligns, rows, footer)
 
+    # -- strany podle strategie (magic number) ------------------------------
+
+    def _page_strategies(self) -> None:
+        """
+        Srovnávací strana všech strategií v období.
+
+        Nahoře průběh kumulativního výsledku a výsledek podle strategie,
+        dole tabulka výkonnosti. Výška tabulky se řídí počtem strategií;
+        když se všechny nevejdou ani při zhuštěných řádcích, vypíší se jen
+        ty nejlepší a podtitulek to uvede.
+        """
+        m = self.metrics
+        strategies = m.strategies
+        count = len(strategies)
+        top = self._new_page(
+            "Přehled strategií",
+            f"{plural(count, 'strategie', 'strategie', 'strategií')} · {self._period_subtitle()}",
+        )
+        content_width = PAGE_WIDTH - 2 * MARGIN
+        bottom = FOOTER_HEIGHT + 14
+        height = top - bottom
+
+        # Kolik řádků (strategie + souhrnný řádek) se do tabulky vůbec vejde
+        max_table_height = height - GUTTER - STRATEGY_CHART_MIN_HEIGHT
+        capacity = int((max_table_height - STRATEGY_TABLE_OVERHEAD) // STRATEGY_ROW_MIN_HEIGHT) - 1
+        listed = strategies[:max(1, capacity)]
+        needed = STRATEGY_TABLE_OVERHEAD + (len(listed) + 1) * STRATEGY_ROW_HEIGHT
+        table_height = max(120.0, min(max_table_height, needed))
+        chart_height = height - table_height - GUTTER
+        chart_y = top - chart_height
+
+        curves_width = content_width * 0.665
+        bars_width = content_width - curves_width - GUTTER
+        self._chart_card(
+            MARGIN, chart_y, curves_width, chart_height,
+            "Kumulativní výsledek podle strategie",
+            lambda size: charts.strategy_curves_chart(strategies, m.period, self.currency, size),
+            subtitle="Součet čistých výsledků uzavřených obchodů od začátku období",
+        )
+        self._chart_card(
+            MARGIN + curves_width + GUTTER, chart_y, bars_width, chart_height,
+            "Výsledek podle strategie",
+            lambda size: charts.strategy_chart(strategies, self.currency, size),
+            subtitle=plural(count, "strategie", "strategie", "strategií"),
+        )
+
+        shown = (f"zobrazeno {len(listed)} nejlepších z {count} · "
+                 if len(listed) < count else "")
+        inner = self._card(
+            MARGIN, bottom, content_width, table_height,
+            "Výkonnost podle strategie",
+            subtitle=[
+                f"Seřazeno podle čistého výsledku · {shown}max. pokles z kumulativního "
+                f"výsledku strategie · částky v {self.currency}",
+                f"Seřazeno podle čistého výsledku · {shown}částky v {self.currency}",
+            ],
+        )
+        self._strategy_table(*inner, listed)
+
+    def _strategy_table(self, x: float, y: float, width: float, height: float,
+                        strategies: Sequence[StrategyMetrics]) -> None:
+        """
+        Vykreslí tabulku výkonnosti strategií do zadané plochy.
+
+        Souhrnný řádek nese hodnoty celého účtu – maximální pokles účtu proto
+        není součtem poklesů strategií.
+
+        :param strategies: strategie k vypsání (už seřazené)
+        """
+        headers = ["Strategie", "Obchodů", "Úspěšnost", "Profit Factor", "RRR",
+                   "Prům. obchod", "Loty", "Max. pokles", "Hrubý zisk",
+                   "Hrubá ztráta", "Čistý výsledek"]
+        weights = [0.15, 0.07, 0.08, 0.09, 0.08, 0.09, 0.07, 0.09, 0.09, 0.09, 0.10]
+        aligns = ["left"] + ["right"] * 10
+
+        def row(label: str, m: Metrics) -> List[Tuple[str, Optional[str]]]:
+            """Jeden řádek tabulky z metrik strategie nebo účtu."""
+            return [
+                (label, None),
+                (cs_number(m.trades, 0), None),
+                (percent(m.win_rate, 0), None),
+                (ratio(m.profit_factor), None),
+                (rrr(m.payoff_ratio), None),
+                (signed_money(m.expectancy, decimals=2), self._pl_color(m.expectancy)),
+                (cs_number(m.volume, 2), None),
+                (money(m.max_drawdown, decimals=2),
+                 theme.LOSS_TEXT if m.max_drawdown else None),
+                (money(m.gross_profit, decimals=2),
+                 theme.PROFIT_TEXT if m.gross_profit else None),
+                (money(m.gross_loss, decimals=2),
+                 theme.LOSS_TEXT if m.gross_loss else None),
+                (signed_money(m.net_profit, decimals=2), self._pl_color(m.net_profit)),
+            ]
+
+        rows = [row(s.label, s.metrics) for s in strategies]
+        self._table(x, y, width, height, headers, weights, aligns, rows,
+                    footer=row("Celý účet", self.metrics))
+
+    def _page_strategy(self, strategy: StrategyMetrics, index: int, count: int) -> None:
+        """
+        Kompaktní strana jedné strategie: KPI, kumulativní výsledek, klíčové
+        ukazatele a rozpady podle času, symbolu a směru.
+
+        :param strategy: strategie a její metriky
+        :param index: pořadí strategie (od 1) – kvůli orientaci v reportu
+        :param count: celkový počet strategií
+        """
+        m = strategy.metrics
+        top = self._new_page(f"Strategie {index} z {count}", self._period_subtitle(m),
+                             heading=strategy.label)
+        content_width = PAGE_WIDTH - 2 * MARGIN
+        bottom = FOOTER_HEIGHT + 14
+
+        kpi_y = self._kpi_row(m, top)
+
+        # Prostřední pás: kumulativní výsledek strategie + souhrn ukazatelů
+        lower_height = 178.0
+        middle_top = kpi_y - GUTTER
+        middle_height = middle_top - bottom - GUTTER - lower_height
+        middle_y = middle_top - middle_height
+        chart_width = content_width * 0.665
+        stats_width = content_width - chart_width - GUTTER
+
+        self._chart_card(
+            MARGIN, middle_y, chart_width, middle_height,
+            "Kumulativní výsledek strategie",
+            lambda size: charts.equity_chart(m, size, relative=True),
+            subtitle=f"Součet čistých výsledků obchodů strategie · konečný "
+                     f"{signed_money(m.net_profit, self.currency)}",
+        )
+        inner = self._card(MARGIN + chart_width + GUTTER, middle_y, stats_width,
+                           middle_height, "Klíčové ukazatele")
+        self._stat_rows(*inner, self._strategy_stats(m))
+
+        self._breakdown_cards(m, bottom, lower_height)
+
+    def _strategy_stats(self, m: Metrics) -> List[Tuple[str, str, Optional[str]]]:
+        """
+        Klíčové ukazatele strategie zobrazené vedle jejího kumulativního výsledku.
+
+        Místo zůstatku (u strategie nemá smysl) uvádí podíl strategie na
+        obchodech účtu a průměrný obchod.
+        """
+        total = self.metrics.trades
+        share = 100.0 * m.trades / total if total else 0.0
+        best_day = (f"{datetime_cs(m.best_day[0], with_time=False)} · "
+                    f"{compact_money(m.best_day[1], self.currency)}") if m.best_day else "—"
+        worst_day = (f"{datetime_cs(m.worst_day[0], with_time=False)} · "
+                     f"{compact_money(m.worst_day[1], self.currency)}") if m.worst_day else "—"
+        return [
+            ("Podíl na obchodech účtu", f"{m.trades} z {total} · {percent(share, 0)}", None),
+            ("Průměrný obchod", money(m.expectancy, self.currency), self._pl_color(m.expectancy)),
+            ("Průměrný zisk", self._optional_money(m.avg_win, bool(m.wins)),
+             self._pl_color(m.avg_win)),
+            ("Průměrná ztráta", self._optional_money(m.avg_loss, bool(m.losses)),
+             self._pl_color(m.avg_loss)),
+            ("Největší zisk", self._optional_money(m.largest_win, bool(m.wins)),
+             self._pl_color(m.largest_win)),
+            ("Největší ztráta", self._optional_money(m.largest_loss, bool(m.losses)),
+             self._pl_color(m.largest_loss)),
+            ("Nejlepší den", best_day, theme.PROFIT_TEXT if m.best_day and m.best_day[1] > 0 else None),
+            ("Nejhorší den", worst_day, theme.LOSS_TEXT if m.worst_day and m.worst_day[1] < 0 else None),
+            ("Nejdelší série zisků / ztrát",
+             f"{m.max_consecutive_wins}× / {m.max_consecutive_losses}×", None),
+            ("Průměrná doba obchodu", duration(m.avg_duration_minutes), None),
+            ("Sharpeho poměr", ratio(m.sharpe_ratio), None),
+            ("Poplatky a swapy", money(m.commission + m.swap, self.currency), None),
+        ]
+
     # -- strany se seznamem obchodů -----------------------------------------
 
     # -- seznam obchodů ------------------------------------------------------
@@ -803,6 +1010,27 @@ class ReportPdf:
     TRADE_ALIGNS = ["right", "left", "left", "left", "left", "right",
                     "right", "right", "right", "right", "right", "right"]
 
+    # Varianta tabulky se sloupcem Magic (za časem uzavření); ostatní sloupce
+    # jsou mírně užší, aby se tabulka vešla do stejné šířky
+    TRADE_HEADERS_MAGIC = ["#", "Otevřeno", "Uzavřeno", "Magic", "Symbol", "Směr", "Objem",
+                           "Otevírací cena", "Zavírací cena", "Provize", "Swap", "Zisk",
+                           "Výsledek"]
+    TRADE_WEIGHTS_MAGIC = [0.03, 0.122, 0.122, 0.074, 0.075, 0.05, 0.05,
+                           0.085, 0.085, 0.06, 0.055, 0.085, 0.085]
+    TRADE_ALIGNS_MAGIC = ["right", "left", "left", "left", "left", "left", "right",
+                          "right", "right", "right", "right", "right", "right"]
+
+    def _trade_columns(self) -> Tuple[List[str], List[float], List[str]]:
+        """
+        Hlavička, šířky a zarovnání sloupců tabulky obchodů.
+
+        Sloupec Magic se zobrazí jen tehdy, když jsou magic numbers načtené;
+        jinak by obsahoval samé pomlčky.
+        """
+        if self.report.has_magic:
+            return self.TRADE_HEADERS_MAGIC, self.TRADE_WEIGHTS_MAGIC, self.TRADE_ALIGNS_MAGIC
+        return self.TRADE_HEADERS, self.TRADE_WEIGHTS, self.TRADE_ALIGNS
+
     def _sorted_positions(self) -> List[Position]:
         """Obchody období seřazené podle času uzavření."""
         return sorted(self.metrics.positions, key=lambda p: p.close_time or datetime.min)
@@ -813,10 +1041,15 @@ class ReportPdf:
         rows: List[List[Tuple[str, Optional[str]]]] = []
         for offset, position in enumerate(positions, start=first_number):
             net = position.net_profit
+            # Magic number vypisujeme jako surové číslo (0 = ruční obchod),
+            # pomlčka znamená, že se k pozici v CSV nenašlo
+            magic = ([("—" if position.magic is None else str(position.magic), None)]
+                     if self.report.has_magic else [])
             rows.append([
                 (str(offset), None),
                 (datetime_cs(position.open_time, with_seconds=True), None),
                 (datetime_cs(position.close_time, with_seconds=True), None),
+                *magic,
                 (position.symbol, None),
                 ("Dlouhá" if position.direction == "buy" else "Krátká", None),
                 (cs_number(position.volume, 2), None),
@@ -851,7 +1084,7 @@ class ReportPdf:
             subtitle=f"Řazeno podle času uzavření · zobrazeno {start + 1}–"
                      f"{start + len(chunk)} z {len(positions)} · částky v {self.currency}",
         )
-        self._table(*inner, self.TRADE_HEADERS, self.TRADE_WEIGHTS, self.TRADE_ALIGNS,
+        self._table(*inner, *self._trade_columns(),
                     self._trade_rows(chunk, start + 1), row_height=TRADE_ROW_HEIGHT)
         return len(chunk)
 

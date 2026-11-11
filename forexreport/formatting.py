@@ -117,6 +117,20 @@ def rrr(value: Optional[float], decimals: int = 2) -> str:
     return f"1{NBSP}:{NBSP}{cs_number(value, decimals)}"
 
 
+def strategy_label(magic: Optional[int]) -> str:
+    """
+    Popisek strategie podle jejího magic number.
+
+    Ruční obchody mají v MetaTraderu magic number 0; None znamená, že se
+    magic number k pozici nepodařilo dohledat.
+    """
+    if magic is None:
+        return "Bez magic number"
+    if magic == 0:
+        return "Ruční obchody"
+    return f"Magic {magic}"
+
+
 def compact_money(value: float, currency: str = "") -> str:
     """
     Naformátuje částku s přesností podle jejího řádu.

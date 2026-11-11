@@ -7,7 +7,8 @@ ve formátu A4 na šířku – jako PDF, nebo jako jeden dlouhý PNG.
 
 První strana je **zhuštěný přehled**, který se celý vejde na jednu obrazovku;
 teprve další strany rozvádějí analýzu výkonnosti, podrobné ukazatele a seznam
-jednotlivých obchodů.
+jednotlivých obchodů. S doplňkovým souborem magic numbers report navíc
+rozdělí obchody **podle strategií** (viz [Magic numbers a strategie](#magic-numbers-a-strategie)).
 
 ---
 
@@ -161,6 +162,7 @@ V zadání data lze používat i oddělovače (`2026-08-25`, `2026.08.25`).
 | `-o`, `--output` | cesta k výstupnímu souboru (výchozí: `<vstup>-<období>.pdf` vedle vstupního souboru); koncovka `.png` přepne výstup na obrázek |
 | `-f`, `--format` | `pdf` (výchozí), `png` (jeden dlouhý obrázek) nebo `both` |
 | `--dpi` | rozlišení PNG, 72–300 (výchozí 150) |
+| `--magic` | soubor s magic numbers (výchozí: `MagicNumbers-<účet>.csv` vedle vstupního souboru, pokud existuje) – viz [Magic numbers a strategie](#magic-numbers-a-strategie) |
 | `-q`, `--quiet` | vypisovat pouze chyby |
 | `--print-path` | vypsat pouze cestu k vytvořenému PDF (pro skripty) |
 | `--debug` | při chybě vypsat podrobný výpis zásobníku volání |
@@ -169,6 +171,48 @@ V zadání data lze používat i oddělovače (`2026-08-25`, `2026.08.25`).
 
 Návratové kódy: `0` úspěch, `1` chyba při čtení souboru nebo sazbě PDF,
 `2` chybné zadání parametrů.
+
+### Magic numbers a strategie
+
+Standardní export historie z MetaTraderu 5 **magic number neobsahuje**. Proto je
+v projektu skript `mql5/ExportMagicNumbers.mq5`, který ho z terminálu
+vyexportuje do doplňkového souboru `MagicNumbers-<účet>.csv`.
+
+Jednorázová instalace skriptu:
+
+1. V MetaTraderu 5 otevřete *Soubor → Otevřít složku dat*.
+2. Zkopírujte `mql5/ExportMagicNumbers.mq5` do podsložky `MQL5/Scripts`.
+3. V *Navigátoru* klikněte na *Skripty* pravým tlačítkem → *Obnovit*
+   (případně skript otevřete v MetaEditoru a přeložte klávesou F7).
+
+Export (pokaždé spolu s exportem `ReportHistory-*.xlsx`):
+
+1. Přetáhněte skript *ExportMagicNumbers* z *Navigátoru* na libovolný graf
+   a potvrďte. Skript ukáže, kam soubor uložil – do `MQL5/Files` ve složce dat.
+2. Zkopírujte `MagicNumbers-<účet>.csv` **vedle** souboru `ReportHistory-<účet>.xlsx`.
+   Aplikace ho tam najde sama podle čísla účtu; jinde ho lze zadat přepínačem
+   `--magic`.
+
+```bash
+python report.py ReportHistory-498754.xlsx --month=last                  # najde MagicNumbers-498754.csv sám
+python report.py ReportHistory-498754.xlsx --magic=export/magic.csv
+```
+
+Soubor má jednoduchý formát `position;magic;symbol;time` a páruje se s pozicemi
+podle čísla pozice (sloupec *Pozice* v exportu). Magic number pozice je magic
+number obchodu, který ji otevřel; ruční obchody mají magic number `0`.
+
+S načtenými magic numbers report:
+
+* přidá do **seznamu obchodů** sloupec *Magic*,
+* jsou-li ve zvoleném období **alespoň dvě strategie**, přidá před seznam
+  obchodů srovnávací stranu strategií a pro každou strategii jednu stranu
+  (viz [Obsah reportu](#strany-podle-strategie)).
+
+Pokud v souboru některé pozice chybí (soubor je starší než export historie),
+aplikace to ohlásí a tyto obchody v reportu seskupí jako *Bez magic number*.
+Nečitelný automaticky nalezený soubor jen ohlásí a report vytvoří bez
+rozdělení podle strategií; chyba v souboru zadaném přes `--magic` je fatální.
 
 ---
 
@@ -211,10 +255,35 @@ symbolů a směru – histogram ani dny v týdnu pro jediný den nedávají smys
 * Tabulka výkonnosti podle jednotlivých symbolů
 * Průměrná velikost ziskového a ztrátového obchodu
 
-### Strana 4 a dále – Seznam obchodů
+### Strany podle strategie
+
+Jen s načtenými magic numbers a při alespoň dvou strategiích v období.
+U jediné strategie by strany jen opakovaly report celého účtu.
+
+**Přehled strategií** (jedna strana):
+
+* Kumulativní výsledek podle strategie – jedna čára na strategii; barva patří
+  strategii (přiděluje se podle magic number), nad osm strategií se zbytek
+  sloučí do šedé řady *Ostatní*
+* Výsledek podle strategie
+* Tabulka výkonnosti podle strategie (počet obchodů, úspěšnost, Profit Factor,
+  RRR, průměrný obchod, loty, maximální pokles, hrubý zisk a ztráta, čistý
+  výsledek) se souhrnným řádkem celého účtu
+
+**Strana strategie** (jedna pro každou strategii, ve stejném pořadí jako
+v tabulce):
+
+* KPI dlaždice jako na úvodní straně
+* Kumulativní výsledek strategie
+* Klíčové ukazatele – podíl na obchodech účtu, průměrný obchod, zisk a ztráta,
+  extrémy, nejlepší a nejhorší den, série, doba obchodu, Sharpe, poplatky
+* Výsledek po úsecích, podle symbolu a dlouhé vs. krátké pozice
+
+### Seznam obchodů (poslední strany)
 
 Kompletní tabulka uzavřených pozic (čas otevření a uzavření včetně vteřin,
-symbol, směr, objem, ceny, provize, swap, hrubý zisk a čistý výsledek).
+magic number – je-li k dispozici, symbol, směr, objem, ceny, provize, swap,
+hrubý zisk a čistý výsledek).
 
 ---
 
@@ -228,7 +297,8 @@ a poslední znak, mezi nimi jsou tři hvězdičky:
 ```
 
 Plné číslo se do PDF nedostane ani do jeho textové vrstvy nebo metadat, takže
-report lze bez obav sdílet. Doplňující údaje v závorce (měna, server, typ účtu)
+report lze bez obav sdílet. Totéž platí pro název souboru s magic numbers,
+který číslo účtu obsahuje – v reportu se neuvádí. Doplňující údaje v závorce (měna, server, typ účtu)
 zůstávají čitelné, protože pro pochopení reportu jsou podstatné.
 
 ---
@@ -250,6 +320,12 @@ zůstávají čitelné, protože pro pochopení reportu jsou podstatné.
 * **Sharpeho poměr** vychází z denních výnosů vztažených k počátečnímu
   zůstatku, anualizovaný přes 252 obchodních dnů; při méně než dvou obchodních
   dnech se neuvádí.
+* **Strategie = magic number.** Metriky strategie se počítají stejně jako
+  u účtu, jen z jejích obchodů. Výchozím bodem je počáteční zůstatek účtu,
+  takže zhodnocení a maximální pokles v procentech vyjadřují dopad strategie
+  na účet. Maximální pokles strategie se měří na jejím kumulativním výsledku;
+  souhrnný řádek tabulky strategií uvádí pokles celého účtu, který není
+  součtem poklesů strategií.
 
 > Poznámka: MetaTrader ve své sekci *Výsledky* člení obchody podle hrubého
 > zisku bez poplatků, zatímco tento report pracuje s čistými výsledky. Součty
@@ -266,9 +342,11 @@ spustit-macos.command      startovací skript pro macOS
 spustit-linux.sh           startovací skript pro Linux
 spustit-windows.bat        startovací skript pro Windows
 scripts/bootstrap.sh       společná logika startovacích skriptů (macOS + Linux)
+mql5/ExportMagicNumbers.mq5  skript pro MT5: export magic numbers do CSV
 forexreport/
 ├── cli.py                 zpracování argumentů a orchestrace
 ├── mt5_parser.py          čtení exportu z MetaTraderu 5
+├── magic.py               načtení magic numbers z CSV a jejich přiřazení k pozicím
 ├── periods.py             rozbor a vyhodnocení parametru období
 ├── metrics.py             výpočet obchodních metrik
 ├── charts.py              vykreslení grafů (matplotlib)

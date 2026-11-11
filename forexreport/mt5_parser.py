@@ -37,6 +37,9 @@ class Position:
     commission: float
     swap: float
     gross_profit: float            # zisk bez poplatků (sloupec "Zisk")
+    # Magic number strategie, která pozici otevřela; standardní export MT5 ho
+    # neobsahuje, doplňuje se z CSV (viz modul magic). None = neznámé.
+    magic: Optional[int] = None
 
     @property
     def net_profit(self) -> float:
@@ -76,6 +79,9 @@ class Deal:
     profit: float
     balance: Optional[float]
     comment: str
+    # Číslo pokynu, kterým obchod vznikl; u vstupního obchodu se shoduje
+    # s číslem pozice (Position ID)
+    order: str = ""
 
 
 @dataclass
@@ -89,6 +95,12 @@ class AccountInfo:
     currency: str = ""
     server: str = ""
 
+    @property
+    def login(self) -> str:
+        """Samotné číslo účtu – první slovo řetězce "498754 (USD, …)"."""
+        parts = self.account.split()
+        return parts[0] if parts else ""
+
 
 @dataclass
 class Mt5Report:
@@ -99,6 +111,13 @@ class Mt5Report:
     deals: List[Deal] = field(default_factory=list)
     summary: Dict[str, Any] = field(default_factory=dict)
     source_file: str = ""
+    # Cesta k doplňkovému CSV s magic numbers; prázdná, pokud se nenačítalo
+    magic_source: str = ""
+
+    @property
+    def has_magic(self) -> bool:
+        """True, pokud byly k pozicím načteny magic numbers."""
+        return bool(self.magic_source)
 
     @property
     def initial_balance(self) -> float:
@@ -471,6 +490,7 @@ def _parse_deals(rows: List[List[Any]], start: Optional[int]) -> List[Deal]:
                 profit=_to_float(_cell(row, mapping, "profit")),
                 balance=_to_optional_float(_cell(row, mapping, "balance")),
                 comment=str(_cell(row, mapping, "comment") or "").strip(),
+                order=str(_cell(row, mapping, "order") or "").strip(),
             )
         )
     return deals
@@ -529,7 +549,9 @@ def _positions_from_deals(deals: List[Deal]) -> List[Position]:
             entry_deal = queue.pop(0)
             positions.append(
                 Position(
-                    ticket=entry_deal.ticket,
+                    # Číslo pozice v MT5 je číslo pokynu, který ji otevřel; jen
+                    # podle něj lze pozici spárovat s magic numbers z CSV
+                    ticket=entry_deal.order or entry_deal.ticket,
                     symbol=deal.symbol,
                     # Směr pozice je opačný než uzavírací obchod
                     direction="buy" if deal.deal_type == "sell" else "sell",

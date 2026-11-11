@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .formatting import strategy_label
 from .mt5_parser import Mt5Report, Position
 from .periods import Period
 
@@ -108,6 +109,10 @@ class Metrics:
     trade_results: List[float] = field(default_factory=list)
     positions: List[Position] = field(default_factory=list)
 
+    # Rozpad podle strategie (magic number); plní se jen u metrik celého účtu
+    # a jen tehdy, když jsou magic numbers k dispozici
+    strategies: List["StrategyMetrics"] = field(default_factory=list)
+
     # ---- odvozené vlastnosti -------------------------------------------------
 
     @property
@@ -167,6 +172,33 @@ class Metrics:
     def is_empty(self) -> bool:
         """True, pokud za období nebyl uzavřen žádný obchod."""
         return self.trades == 0
+
+
+@dataclass
+class StrategyMetrics:
+    """
+    Metriky jedné strategie, identifikované magic numberem.
+
+    Metriky se počítají stejně jako u celého účtu, jen nad obchody strategie.
+    Výchozím zůstatkem je počáteční zůstatek účtu, takže zhodnocení i pokles
+    v procentech vyjadřují dopad strategie na účet.
+
+    :param magic: magic number (None = neznámé, 0 = ruční obchody)
+    :param label: popisek strategie pro report
+    :param metrics: metriky spočtené nad obchody strategie
+    """
+
+    magic: Optional[int]
+    label: str
+    metrics: Metrics
+
+    @property
+    def group(self) -> GroupStats:
+        """Souhrn strategie ve tvaru skupiny – pro grafy sdílené s rozpady."""
+        m = self.metrics
+        return GroupStats(key=self.label, trades=m.trades, wins=m.wins, losses=m.losses,
+                          net=m.net_profit, gross_profit=m.gross_profit,
+                          gross_loss=m.gross_loss, volume=m.volume)
 
 
 # ---------------------------------------------------------------------------
@@ -316,15 +348,25 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     """
     Spočítá všechny metriky reportu za zvolené období.
 
+    Jsou-li k dispozici magic numbers, spočítá navíc metriky pro každou
+    strategii zvlášť (Metrics.strategies).
+
     :param report: načtený export z MT5
     :param period: vyhodnocené období
     """
     selected = filter_positions(report.positions, period)
-    metrics = Metrics(period=period, currency=report.account.currency or "USD")
-    metrics.positions = selected
+    currency = report.account.currency or "USD"
+    metrics = _compute(selected, period, _opening_balance(report, period), currency)
+    if report.has_magic:
+        metrics.strategies = _compute_strategies(metrics)
+    return metrics
 
-    # Počáteční zůstatek období = počáteční kapitál + vše realizované před obdobím
-    # (včetně vkladů a výběrů, které mohly proběhnout dříve).
+
+def _opening_balance(report: Mt5Report, period: Period) -> float:
+    """
+    Počáteční zůstatek období = počáteční kapitál + vše realizované před
+    obdobím (včetně vkladů a výběrů, které mohly proběhnout dříve).
+    """
     opening = report.initial_balance
     for position in report.positions:
         if position.close_time and position.close_time < period.start:
@@ -332,6 +374,49 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     for deal in report.deposits[1:]:
         if deal.time and deal.time < period.start:
             opening += deal.profit
+    return opening
+
+
+def _compute_strategies(account: Metrics) -> List[StrategyMetrics]:
+    """
+    Rozdělí obchody období podle magic number a pro každou strategii spočítá
+    samostatné metriky.
+
+    Strategie jsou seřazené podle čistého výsledku od nejlepší; při shodě
+    rozhoduje magic number, aby pořadí bylo stálé.
+
+    :param account: metriky celého účtu za období
+    """
+    groups: "OrderedDict[Optional[int], List[Position]]" = OrderedDict()
+    for position in account.positions:
+        groups.setdefault(position.magic, []).append(position)
+
+    strategies = [
+        StrategyMetrics(
+            magic=magic,
+            label=strategy_label(magic),
+            metrics=_compute(positions, account.period, account.opening_balance,
+                             account.currency),
+        )
+        for magic, positions in groups.items()
+    ]
+    # Neznámé magic number (None) řadíme při shodě výsledku až na konec
+    strategies.sort(key=lambda s: (-s.metrics.net_profit, s.magic is None, s.magic or 0))
+    return strategies
+
+
+def _compute(selected: List[Position], period: Period, opening: float,
+             currency: str) -> Metrics:
+    """
+    Spočítá metriky nad zadanými obchody.
+
+    :param selected: obchody uzavřené v období, seřazené podle času uzavření
+    :param period: vyhodnocené období
+    :param opening: zůstatek na začátku období (výchozí bod křivky zůstatku)
+    :param currency: měna účtu
+    """
+    metrics = Metrics(period=period, currency=currency)
+    metrics.positions = selected
     metrics.opening_balance = opening
 
     if not selected:
