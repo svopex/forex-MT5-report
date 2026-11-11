@@ -1011,7 +1011,9 @@ class ReportPdf:
 
         Obsah buňky je funkce pořadového čísla a pozice. Sloupce "Otevřeno"
         a "Uzavřeno" jsou širší kvůli času včetně vteřin; magic number se
-        vypisuje surové (0 = ruční obchod).
+        vypisuje surové (0 = ruční obchod) a jeho sloupec pojme až 15 číslic
+        (EA často skládají magic number z data a času, např. 202611110801).
+        Ceny a zisk mají šířku jen s malou rezervou nad záhlavím.
         """
         return [
             ("#", 0.032, "right", lambda number, p: (str(number), None)),
@@ -1019,17 +1021,17 @@ class ReportPdf:
              lambda number, p: (datetime_cs(p.open_time, with_seconds=True), None)),
             ("Uzavřeno", 0.118, "left",
              lambda number, p: (datetime_cs(p.close_time, with_seconds=True), None)),
-            ("Magic", 0.074, "left", lambda number, p: (str(p.magic), None)),
+            ("Magic", 0.100, "left", lambda number, p: (str(p.magic), None)),
             ("Symbol", 0.069, "left", lambda number, p: (p.symbol, None)),
             ("Směr", 0.051, "left",
              lambda number, p: ("Dlouhá" if p.direction == "buy" else "Krátká", None)),
             ("Objem", 0.051, "right", lambda number, p: (cs_number(p.volume, 2), None)),
-            ("Otevírací cena", 0.088, "right", lambda number, p: (self._price(p.open_price), None)),
-            ("Zavírací cena", 0.088, "right", lambda number, p: (self._price(p.close_price), None)),
+            ("Otevírací cena", 0.080, "right", lambda number, p: (self._price(p.open_price), None)),
+            ("Zavírací cena", 0.080, "right", lambda number, p: (self._price(p.close_price), None)),
             ("Provize", 0.060, "right", lambda number, p: (money(p.commission, decimals=2), None)),
             ("Swap", 0.056, "right", lambda number, p: (money(p.swap, decimals=2), None)),
-            ("Zisk", 0.088, "right", lambda number, p: (money(p.gross_profit, decimals=2), None)),
-            ("Výsledek", 0.083, "right",
+            ("Zisk", 0.080, "right", lambda number, p: (money(p.gross_profit, decimals=2), None)),
+            ("Výsledek", 0.081, "right",
              lambda number, p: (signed_money(p.net_profit, decimals=2), self._pl_color(p.net_profit))),
         ]
 
