@@ -5,16 +5,29 @@
 //| generátor reportů (report.py) použije k rozdělení obchodů podle  |
 //| strategií. Standardní export historie MT5 magic number nemá.     |
 //|                                                                  |
-//| Výstup: <datová složka terminálu>\MQL5\Files\MagicNumbers-<účet>.csv
+//| Výstup: <InpOutputDir>\MagicNumbers-<účet>.csv, a není-li adresář  |
+//|         zadán nebo přesun selže, <data>\MQL5\Files\MagicNumbers-<účet>.csv
 //| Formát: position;magic;symbol;time                               |
 //+------------------------------------------------------------------+
 #property copyright   "forex-MT5-report"
-#property version     "1.00"
-#property description "Uloží magic number všech pozic z historie účtu do MQL5\\Files\\MagicNumbers-<účet>.csv"
+#property version     "1.10"
+#property description "Uloží magic number všech pozic z historie účtu do MagicNumbers-<účet>.csv v adresáři projektu (bez něj do MQL5\\Files)"
 #property script_show_inputs
+
+// MQL5 smí zapisovat jen do sandboxu MQL5\Files; do adresáře projektu se
+// hotový soubor přesune funkcí Windows. Volá se jen při povoleném importu DLL.
+#import "kernel32.dll"
+int MoveFileExW(string existingFileName, string newFileName, uint flags);
+#import
+
+#define MOVEFILE_REPLACE_EXISTING 0x1
+#define MOVEFILE_COPY_ALLOWED     0x2
 
 // Začátek historie, od kterého se obchody exportují (výchozí: celá historie)
 input datetime InpFrom = D'1970.01.01 00:00';
+// Adresář, kam se CSV přesune (vedle ReportHistory-*.xlsx); prázdný = zůstane
+// v MQL5\Files. Instalace přes scripts\deploy.cmd sem doplní adresář projektu.
+input string   InpOutputDir = "";
 
 //+------------------------------------------------------------------+
 //| Vstupní bod skriptu: projde vstupní obchody historie a ke každé  |
@@ -74,11 +87,52 @@ void OnStart()
      }
    FileClose(handle);
 
-   // Uživateli oznámíme, kam soubor uložit dál – vedle exportu ReportHistory-*.xlsx
-   // ho report najde sám
-   string path = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + fileName;
-   PrintFormat("ExportMagicNumbers: zapsáno %d vstupních obchodů do %s", written, path);
-   Alert("ExportMagicNumbers: zapsáno ", written, " vstupních obchodů do ", path,
-         ". Zkopírujte soubor vedle exportu ReportHistory-", login, ".xlsx.");
+   // Bez zadaného InpOutputDir nebo při neúspěšném přesunu zůstane soubor
+   // v MQL5\Files a uživatel ho musí zkopírovat vedle exportu historie sám;
+   // po přesunu leží vedle ReportHistory-*.xlsx a report ho najde sám
+   string path    = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + fileName;
+   string problem = "";
+   string hint    = "";
+   if(InpOutputDir == "" || !MoveToOutputDir(path, fileName, problem))
+     {
+      if(problem != "")
+         hint = " " + problem + ".";
+      hint += StringFormat(" Zkopírujte soubor vedle exportu ReportHistory-%I64d.xlsx.", login);
+     }
+
+   string message = StringFormat("ExportMagicNumbers: zapsáno %d vstupních obchodů do %s.%s", written, path, hint);
+   Print(message);
+   Alert(message);
+  }
+
+//+------------------------------------------------------------------+
+//| Přesune hotové CSV ze sandboxu MQL5\Files do InpOutputDir.       |
+//| path     - vstup: úplná cesta k souboru v MQL5\Files;            |
+//|            při úspěchu se přepíše na cílovou cestu               |
+//| fileName - název souboru v cílovém adresáři                      |
+//| problem  - při neúspěchu důvod, proč soubor zůstal v MQL5\Files  |
+//| Vrací true, pokud byl soubor přesunut.                           |
+//+------------------------------------------------------------------+
+bool MoveToOutputDir(string &path, const string fileName, string &problem)
+  {
+   // Bez povoleného importu DLL by volání kernel32 skript ukončilo kritickou chybou
+   if(!MQLInfoInteger(MQL_DLLS_ALLOWED))
+     {
+      problem = "Do adresáře " + InpOutputDir + " ho nelze přesunout bez povolení importu DLL "
+                + "(záložka Závislosti při spuštění skriptu)";
+      return false;
+     }
+
+   // Přepíše starší export; COPY_ALLOWED umožní přesun i na jiný disk.
+   // Koncové lomítko v InpOutputDir nevadí – Windows zdvojené "\\" v cestě sloučí.
+   string target = InpOutputDir + "\\" + fileName;
+   if(MoveFileExW(path, target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) == 0)
+     {
+      problem = "Přesun do " + target + " selhal – adresář neexistuje nebo je soubor otevřený "
+                + "(např. v Excelu)";
+      return false;
+     }
+   path = target;
+   return true;
   }
 //+------------------------------------------------------------------+

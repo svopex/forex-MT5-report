@@ -178,7 +178,25 @@ Standardní export historie z MetaTraderu 5 **magic number neobsahuje**. Proto j
 v projektu skript `mql5/ExportMagicNumbers.mq5`, který ho z terminálu
 vyexportuje do doplňkového souboru `MagicNumbers-<účet>.csv`.
 
-Jednorázová instalace skriptu:
+Jednorázová instalace skriptu – automaticky do **všech nainstalovaných MT5**
+na Windows:
+
+```bat
+scripts\deploy.cmd
+```
+
+Skript najde všechny terminály MetaTrader 5, které mají MetaEditor a datovou
+složku (běžné instalace podle `%APPDATA%\MetaQuotes\Terminal\*\origin.txt`
+i přenosné instalace v *Program Files*), do každého zkopíruje `mql5\*.mq5`
+do `MQL5\Scripts` a skript tam přeloží. Výchozí hodnotu vstupu *InpOutputDir*
+přitom nastaví na adresář projektu, takže export pak skončí rovnou v projektu.
+U každého terminálu vypíše výsledek
+kompilace (`Result: 0 errors, …`) a skončí řádkem `Nasazeno do N terminalu.`;
+při chybě vrací návratový kód `1`. Po aktualizaci skriptu stačí `deploy.cmd`
+spustit znovu. Běžící terminál zavírat nemusíte; pokud se skript v *Navigátoru*
+hned neobjeví, klikněte na *Skripty* pravým tlačítkem → *Obnovit*.
+
+Ruční instalace (jiný systém nebo jediný terminál):
 
 1. V MetaTraderu 5 otevřete *Soubor → Otevřít složku dat*.
 2. Zkopírujte `mql5/ExportMagicNumbers.mq5` do podsložky `MQL5/Scripts`.
@@ -187,11 +205,21 @@ Jednorázová instalace skriptu:
 
 Export (pokaždé spolu s exportem `ReportHistory-*.xlsx`):
 
-1. Přetáhněte skript *ExportMagicNumbers* z *Navigátoru* na libovolný graf
-   a potvrďte. Skript ukáže, kam soubor uložil – do `MQL5/Files` ve složce dat.
-2. Zkopírujte `MagicNumbers-<účet>.csv` **vedle** souboru `ReportHistory-<účet>.xlsx`.
-   Aplikace ho tam najde sama podle čísla účtu; jinde ho lze zadat přepínačem
-   `--magic`.
+1. Přetáhněte skript *ExportMagicNumbers* z *Navigátoru* (záložka *Obecné*,
+   složka *Skripty*) na libovolný graf a potvrďte.
+2. Skript zapíše `MagicNumbers-<účet>.csv` do adresáře ze vstupu *InpOutputDir* –
+   po instalaci přes `deploy.cmd` je to adresář projektu – a ukáže, kam soubor
+   uložil. Uložte do stejného adresáře i export `ReportHistory-<účet>.xlsx`;
+   aplikace pak soubor s magic numbers najde sama podle čísla účtu. Jinde ho lze
+   zadat přepínačem `--magic`.
+
+MQL5 smí sám zapisovat jen do `MQL5\Files` ve složce dat. Skript proto soubor
+vytvoří tam a do *InpOutputDir* ho přesune funkcí Windows, což vyžaduje povolený
+**import DLL** (*Nástroje → Možnosti → Experti → Povolit import DLL*, případně
+zaškrtnutí na záložce *Závislosti* při spuštění skriptu). Je-li *InpOutputDir*
+prázdný (ruční instalace), import DLL není povolen nebo přesun selže (adresář
+neexistuje, soubor je otevřený v Excelu), soubor zůstane v `MQL5\Files`, skript
+ohlásí proč a soubor je potřeba zkopírovat vedle `ReportHistory-<účet>.xlsx` ručně.
 
 ```bash
 python report.py ReportHistory-498754.xlsx --month=last                  # najde MagicNumbers-498754.csv sám
@@ -342,6 +370,8 @@ spustit-macos.command      startovací skript pro macOS
 spustit-linux.sh           startovací skript pro Linux
 spustit-windows.bat        startovací skript pro Windows
 scripts/bootstrap.sh       společná logika startovacích skriptů (macOS + Linux)
+scripts/deploy.cmd         instalace a kompilace mql5/*.mq5 do všech MT5 (Windows)
+scripts/deploy.ps1         vlastní logika instalace, spouští ji deploy.cmd
 mql5/ExportMagicNumbers.mq5  skript pro MT5: export magic numbers do CSV
 forexreport/
 ├── cli.py                 zpracování argumentů a orchestrace
