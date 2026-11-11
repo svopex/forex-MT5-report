@@ -241,7 +241,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Upozornění: magic numbers se nenačetly, report bude bez rozdělení "
                   f"podle strategií. {exc}", file=sys.stderr)
         else:
-            matched = apply_magic(report, mapping, magic_path)
+            matched = apply_magic(report, mapping)
             total = len(report.positions)
             log(f"Magic numbers: {os.path.basename(magic_path)} · přiřazeno {matched} z {total} pozic")
             if matched < total:
@@ -263,10 +263,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         log(f"Obchodů: {metrics.trades} · čistý výsledek: "
             f"{metrics.net_profit:+.2f} {metrics.currency}")
-        # Strany podle strategií vznikají jen při více strategiích v období
+        # Strategie se rozdělují jen při více strategiích v období
         if metrics.strategies:
-            log(f"Strategií v období: {len(metrics.strategies)}"
-                + ("" if len(metrics.strategies) > 1 else " (strany podle strategií se nevytvoří)"))
+            log(f"Strategií v období: {len(metrics.strategies)}")
+        elif report.has_magic:
+            log("V období je jediná strategie – strany podle strategií se nevytvoří.")
 
     try:
         build_report(report, metrics, pdf_path)

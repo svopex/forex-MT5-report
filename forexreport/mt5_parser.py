@@ -111,13 +111,8 @@ class Mt5Report:
     deals: List[Deal] = field(default_factory=list)
     summary: Dict[str, Any] = field(default_factory=dict)
     source_file: str = ""
-    # Cesta k doplňkovému CSV s magic numbers; prázdná, pokud se nenačítalo
-    magic_source: str = ""
-
-    @property
-    def has_magic(self) -> bool:
-        """True, pokud byly k pozicím načteny magic numbers."""
-        return bool(self.magic_source)
+    # True, pokud se k pozicím podařilo přiřadit magic numbers z CSV
+    has_magic: bool = False
 
     @property
     def initial_balance(self) -> float:

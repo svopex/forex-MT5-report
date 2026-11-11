@@ -9,6 +9,7 @@ kde nesou informaci – hustota popisků je největší zdroj nečitelnosti.
 from __future__ import annotations
 
 import io
+from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -20,7 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from . import theme
-from .formatting import cs_number, plural
+from .formatting import cs_number, plural, signed_money
 from .metrics import GroupStats, Metrics, StrategyMetrics
 from .mt5_parser import Position
 from .periods import Period
@@ -178,10 +179,24 @@ def _date_locator(ax, period_kind: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _signed_money(value: float, currency: str = "", decimals: Optional[int] = 2) -> str:
-    """Jako _fmt_money, ale kladné hodnoty dostanou znaménko plus."""
-    text = _fmt_money(value, currency, decimals)
-    return f"+{text}" if round(value, 2) > 0 else text
+def _step_series(curve: Sequence[Tuple[datetime, float]], end: datetime,
+                 shift: float = 0.0) -> Tuple[List[datetime], List[float]]:
+    """
+    Rozloží křivku na časy a hodnoty pro schodový graf.
+
+    Poslední bod protáhne do konce období, aby křivka nekončila "ve vzduchu"
+    a křivky více řad končily ve stejném místě.
+
+    :param curve: body (čas, hodnota) seřazené podle času
+    :param end: konec období
+    :param shift: hodnota odečtená od všech bodů (např. počáteční zůstatek)
+    """
+    times = [t for t, _ in curve]
+    values = [v - shift for _, v in curve]
+    if times and times[-1] < end:
+        times.append(end)
+        values.append(values[-1])
+    return times, values
 
 
 def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
@@ -195,22 +210,16 @@ def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
         (používá se u strategie, kde zůstatek účtu nemá smysl)
     """
     fig, ax = plt.subplots(figsize=size, layout="constrained")
-    times = [t for t, _ in metrics.equity_curve]
     # V relativním režimu odečteme počáteční zůstatek, křivka pak začíná na nule
     reference = 0.0 if relative else metrics.opening_balance
-    shift = metrics.opening_balance if relative else 0.0
-    values = [v - shift for _, v in metrics.equity_curve]
-
-    # Poslední bod protáhneme do konce období, aby křivka nekončila "ve vzduchu"
-    if times and times[-1] < metrics.period.end:
-        times = times + [metrics.period.end]
-        values = values + [values[-1]]
+    quantity = "Výsledek" if relative else "Zůstatek"
+    times, values = _step_series(metrics.equity_curve, metrics.period.end,
+                                 shift=metrics.opening_balance if relative else 0.0)
 
     ax.fill_between(times, values, reference,
                     step="post", color=theme.ACCENT, alpha=0.10, linewidth=0, zorder=1)
     ax.plot(times, values, drawstyle="steps-post",
-            color=theme.ACCENT, linewidth=1.8, zorder=3,
-            label="Výsledek" if relative else "Zůstatek")
+            color=theme.ACCENT, linewidth=1.8, zorder=3, label=quantity)
     # Referenční linie počátečního zůstatku (v relativním režimu nuly)
     ax.axhline(reference, color=theme.AXIS, linewidth=0.9, zorder=2)
 
@@ -218,7 +227,7 @@ def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
     if times:
         end_color = theme.PROFIT_TEXT if values[-1] >= reference else theme.LOSS_TEXT
         ax.annotate(
-            _signed_money(values[-1], metrics.currency) if relative
+            signed_money(values[-1], metrics.currency) if relative
             else _fmt_money(values[-1], metrics.currency),
             xy=(times[-1], values[-1]),
             xytext=(-4, 7), textcoords="offset points",
@@ -229,7 +238,7 @@ def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
     _date_locator(ax, metrics.period.kind)
     ax.yaxis.set_major_formatter(_money_formatter(ax, "y"))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
-    ax.set_ylabel(f"{'Výsledek' if relative else 'Zůstatek'} ({metrics.currency})", fontsize=7.5)
+    ax.set_ylabel(f"{quantity} ({metrics.currency})", fontsize=7.5)
     ax.margins(x=0.01, y=0.12)
     return _finish(fig)
 
@@ -237,11 +246,7 @@ def equity_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 2.6),
 def drawdown_chart(metrics: Metrics, size: Tuple[float, float] = (7.6, 1.7)) -> bytes:
     """Pokles zůstatku od posledního maxima (underwater křivka)."""
     fig, ax = plt.subplots(figsize=size, layout="constrained")
-    times = [t for t, _ in metrics.drawdown_curve]
-    values = [v for _, v in metrics.drawdown_curve]
-    if times and times[-1] < metrics.period.end:
-        times = times + [metrics.period.end]
-        values = values + [values[-1]]
+    times, values = _step_series(metrics.drawdown_curve, metrics.period.end)
 
     ax.fill_between(times, values, 0, step="post",
                     color=theme.LOSS, alpha=0.16, linewidth=0, zorder=1)
@@ -363,26 +368,21 @@ def _net_bars_chart(source: Sequence[GroupStats], currency: str,
 MAX_STRATEGY_SERIES = len(theme.SERIES)
 
 
-def _cumulative(positions: Sequence[Position], period: Period) -> Tuple[List, List[float]]:
+def _cumulative_curve(positions: Sequence[Position],
+                      period: Period) -> List[Tuple[datetime, float]]:
     """
     Kumulativní čistý výsledek obchodů v čase, začínající nulou na začátku období.
 
-    Poslední hodnota se protáhne do konce období, aby křivky všech strategií
-    končily ve stejném místě.
-
-    :return: dvojice (časy, hodnoty)
+    Používá se jen pro sloučenou řadu "Ostatní"; jednotlivé strategie mají
+    křivku spočtenou už v metrikách. Obchody pocházejí z více strategií,
+    proto je musíme znovu seřadit podle času uzavření.
     """
-    times: List = [period.start]
-    values: List[float] = [0.0]
+    curve: List[Tuple[datetime, float]] = [(period.start, 0.0)]
     total = 0.0
     for position in sorted(positions, key=lambda p: p.close_time or period.end):
         total += position.net_profit
-        times.append(position.close_time or period.end)
-        values.append(total)
-    if times[-1] < period.end:
-        times.append(period.end)
-        values.append(total)
-    return times, values
+        curve.append((position.close_time or period.end, total))
+    return curve
 
 
 def _strategy_series(strategies: Sequence[StrategyMetrics],
@@ -398,21 +398,25 @@ def _strategy_series(strategies: Sequence[StrategyMetrics],
 
     :return: seznam čtveřic (popisek, barva, časy, hodnoty)
     """
-    ordered = sorted(strategies, key=lambda s: (s.magic is None, s.magic or 0))
+    ordered = sorted(strategies, key=lambda s: s.magic_order)
     folded: List[StrategyMetrics] = []
     if len(ordered) > MAX_STRATEGY_SERIES:
+        # Magic number je mezi strategiemi jedinečné, slouží proto jako klíč
         significant = sorted(ordered, key=lambda s: abs(s.metrics.net_profit), reverse=True)
-        kept = {id(s) for s in significant[:MAX_STRATEGY_SERIES - 1]}
-        folded = [s for s in ordered if id(s) not in kept]
-        ordered = [s for s in ordered if id(s) in kept]
+        kept = {s.magic for s in significant[:MAX_STRATEGY_SERIES - 1]}
+        folded = [s for s in ordered if s.magic not in kept]
+        ordered = [s for s in ordered if s.magic in kept]
 
     series = []
     for index, strategy in enumerate(ordered):
-        times, values = _cumulative(strategy.metrics.positions, period)
+        # Křivka zůstatku strategie začíná počátečním zůstatkem účtu;
+        # po jeho odečtení zbude kumulativní výsledek strategie
+        m = strategy.metrics
+        times, values = _step_series(m.equity_curve, period.end, shift=m.opening_balance)
         series.append((strategy.label, theme.SERIES[index], times, values))
     if folded:
         merged = [p for s in folded for p in s.metrics.positions]
-        times, values = _cumulative(merged, period)
+        times, values = _step_series(_cumulative_curve(merged, period), period.end)
         series.append((f"Ostatní ({len(folded)})", theme.INK_MUTED, times, values))
     return series
 
@@ -454,7 +458,7 @@ def strategy_curves_chart(strategies: Sequence[StrategyMetrics], period: Period,
         decimals = _series_decimals(ends)
         for _, _, times, values in series:
             ax.annotate(
-                _signed_money(values[-1], decimals=decimals),
+                signed_money(values[-1], decimals=decimals),
                 xy=(times[-1], values[-1]), xytext=(4, 0), textcoords="offset points",
                 ha="left", va="center", fontsize=7.5, fontweight="bold",
                 color=theme.PROFIT_TEXT if values[-1] >= 0 else theme.LOSS_TEXT,

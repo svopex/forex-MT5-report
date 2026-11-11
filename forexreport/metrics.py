@@ -109,8 +109,8 @@ class Metrics:
     trade_results: List[float] = field(default_factory=list)
     positions: List[Position] = field(default_factory=list)
 
-    # Rozpad podle strategie (magic number); plní se jen u metrik celého účtu
-    # a jen tehdy, když jsou magic numbers k dispozici
+    # Rozpad podle strategie (magic number); plní se jen u metrik celého účtu,
+    # jen s načtenými magic numbers a jen při alespoň MIN_STRATEGIES strategiích
     strategies: List["StrategyMetrics"] = field(default_factory=list)
 
     # ---- odvozené vlastnosti -------------------------------------------------
@@ -174,6 +174,11 @@ class Metrics:
         return self.trades == 0
 
 
+# Rozdělení podle strategií má smysl až od dvou strategií v období; jediná
+# strategie by jen opakovala metriky celého účtu
+MIN_STRATEGIES = 2
+
+
 @dataclass
 class StrategyMetrics:
     """
@@ -184,13 +189,21 @@ class StrategyMetrics:
     v procentech vyjadřují dopad strategie na účet.
 
     :param magic: magic number (None = neznámé, 0 = ruční obchody)
-    :param label: popisek strategie pro report
     :param metrics: metriky spočtené nad obchody strategie
     """
 
     magic: Optional[int]
-    label: str
     metrics: Metrics
+
+    @property
+    def label(self) -> str:
+        """Popisek strategie pro report."""
+        return strategy_label(self.magic)
+
+    @property
+    def magic_order(self) -> Tuple[bool, int]:
+        """Klíč řazení podle magic number; neznámé magic number je poslední."""
+        return (self.magic is None, self.magic or 0)
 
     @property
     def group(self) -> GroupStats:
@@ -383,25 +396,26 @@ def _compute_strategies(account: Metrics) -> List[StrategyMetrics]:
     samostatné metriky.
 
     Strategie jsou seřazené podle čistého výsledku od nejlepší; při shodě
-    rozhoduje magic number, aby pořadí bylo stálé.
+    rozhoduje magic number, aby pořadí bylo stálé. Při méně než
+    MIN_STRATEGIES strategiích vrací prázdný seznam a nic nepočítá.
 
     :param account: metriky celého účtu za období
     """
     groups: "OrderedDict[Optional[int], List[Position]]" = OrderedDict()
     for position in account.positions:
         groups.setdefault(position.magic, []).append(position)
+    if len(groups) < MIN_STRATEGIES:
+        return []
 
     strategies = [
         StrategyMetrics(
             magic=magic,
-            label=strategy_label(magic),
             metrics=_compute(positions, account.period, account.opening_balance,
                              account.currency),
         )
         for magic, positions in groups.items()
     ]
-    # Neznámé magic number (None) řadíme při shodě výsledku až na konec
-    strategies.sort(key=lambda s: (-s.metrics.net_profit, s.magic is None, s.magic or 0))
+    strategies.sort(key=lambda s: (-s.metrics.net_profit, s.magic_order))
     return strategies
 
 
