@@ -1,18 +1,46 @@
 """
-Parser exportu historie obchodování z MetaTraderu 5 (soubor ReportHistory-*.xlsx).
+Načtení historie obchodování z CSV, které v MetaTraderu 5 vytváří skript
+mql5/ExportHistory.mq5 (soubor ReportHistory-<účet>.csv).
 
-Sešit je jednolistový a obsahuje několik za sebou jdoucích sekcí:
-hlavička s údaji o účtu, "Pozice", "Pokyny", "Nabídky" (obchody) a "Výsledky".
-Parser je odolný vůči české i anglické lokalizaci exportu.
+Soubor je v UTF-8 s oddělovačem středník a má dvě části oddělené prázdným
+řádkem – údaje o účtu ve tvaru klíč;hodnota a tabulku všech obchodů (deals)
+účtu včetně vkladů a výběrů:
+
+    # forex-MT5-report – historie obchodů z MetaTraderu 5
+    format;1
+    login;498754
+    ...
+    exported;2026.11.11 16:05:12
+
+    time;deal;order;position;type;entry;symbol;volume;price;sl;tp;commission;fee;swap;profit;magic;comment
+    2026.07.03 02:20:37;27520449;0;0;balance;in;;0;0;0;0;0;0;0;15000;0;Deposit
+
+Uzavřené pozice se sestaví z obchodů podle čísla pozice (Position ID).
 """
 
 from __future__ import annotations
 
-import re
-import warnings
+import csv
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
+
+# Verze formátu, kterou zapisuje ExportHistory.mq5 (řádek "format;1")
+SUPPORTED_FORMAT = "1"
+
+# Sloupce tabulky obchodů, které aplikace čte (ostatní jsou jen informativní)
+_REQUIRED_COLUMNS = {
+    "time", "deal", "position", "type", "entry", "symbol", "volume", "price",
+    "commission", "fee", "swap", "profit", "magic",
+}
+
+# Typy obchodů, které nemění zůstatek účtu (kredit, zrušené obchody); ostatní
+# neobchodní typy (vklad, výběr, korekce, bonus, úroky, poplatky…) se
+# počítají jako pohyb zůstatku 'balance'
+_NO_BALANCE_TYPES = {"credit", "buy_canceled", "sell_canceled"}
+
+# Zbytkový objem, pod kterým se pozice považuje za uzavřenou (chyba zaokrouhlení)
+_VOLUME_EPSILON = 1e-8
 
 
 # ---------------------------------------------------------------------------
@@ -32,14 +60,10 @@ class Position:
     close_time: Optional[datetime]
     open_price: Optional[float]
     close_price: Optional[float]
-    stop_loss: Optional[float]
-    take_profit: Optional[float]
-    commission: float
+    commission: float              # provize včetně poplatků (fee) všech obchodů pozice
     swap: float
-    gross_profit: float            # zisk bez poplatků (sloupec "Zisk")
-    # Magic number strategie, která pozici otevřela; standardní export MT5 ho
-    # neobsahuje, doplňuje se z CSV (viz modul magic). None = neznámé.
-    magic: Optional[int] = None
+    gross_profit: float            # zisk bez poplatků
+    magic: int                     # magic number obchodu, který pozici otevřel (0 = ruční)
 
     @property
     def net_profit(self) -> float:
@@ -64,24 +88,21 @@ class Position:
 
 @dataclass
 class Deal:
-    """Jednotlivý obchodní příkaz ze sekce "Nabídky" (deals) včetně stavu zůstatku."""
+    """Jeden obchod (deal) z historie účtu, včetně vkladů a výběrů."""
 
-    time: Optional[datetime]
-    ticket: str
+    time: datetime
+    ticket: int
+    position: str                  # číslo pozice; u neobchodních pohybů "0"
     symbol: str
     deal_type: str                 # 'buy' / 'sell' / 'balance'
-    entry: str                     # 'in' / 'out' / prázdné
-    volume: Optional[float]
-    price: Optional[float]
+    entry: str                     # 'in' / 'out' / 'inout' / 'out_by'
+    volume: float
+    price: float
     commission: float
     fee: float
     swap: float
     profit: float
-    balance: Optional[float]
-    comment: str
-    # Číslo pokynu, kterým obchod vznikl; u vstupního obchodu se shoduje
-    # s číslem pozice (Position ID)
-    order: str = ""
+    magic: int
 
 
 @dataclass
@@ -89,17 +110,10 @@ class AccountInfo:
     """Identifikační údaje účtu z hlavičky exportu."""
 
     name: str = ""
-    account: str = ""
+    account: str = ""              # např. "498754 (USD, FTTrading-Server, demo, Hedge)"
     company: str = ""
     exported_at: str = ""
     currency: str = ""
-    server: str = ""
-
-    @property
-    def login(self) -> str:
-        """Samotné číslo účtu – první slovo řetězce "498754 (USD, …)"."""
-        parts = self.account.split()
-        return parts[0] if parts else ""
 
 
 @dataclass
@@ -107,28 +121,11 @@ class Mt5Report:
     """Kompletní obsah načteného exportu."""
 
     account: AccountInfo
+    # Počáteční kapitál účtu: první vklad, bez něj zůstatek před prvním obchodem
+    initial_balance: float
     positions: List[Position] = field(default_factory=list)
     deals: List[Deal] = field(default_factory=list)
-    summary: Dict[str, Any] = field(default_factory=dict)
     source_file: str = ""
-    # True, pokud se k pozicím podařilo přiřadit magic numbers z CSV
-    has_magic: bool = False
-
-    @property
-    def initial_balance(self) -> float:
-        """
-        Počáteční kapitál účtu.
-
-        Odvozuje se z prvního záznamu typu 'balance' v sekci obchodů; pokud
-        takový záznam chybí, použije se zůstatek před prvním obchodem.
-        """
-        for deal in self.deals:
-            if deal.deal_type == "balance":
-                return deal.profit
-        for deal in self.deals:
-            if deal.balance is not None:
-                return deal.balance - deal.profit - deal.commission - deal.swap - deal.fee
-        return 0.0
 
     @property
     def deposits(self) -> List[Deal]:
@@ -137,429 +134,246 @@ class Mt5Report:
 
 
 # ---------------------------------------------------------------------------
-# Slovníky pro rozpoznání sekcí a sloupců (CZ + EN)
-# ---------------------------------------------------------------------------
-
-_SECTION_ALIASES = {
-    "positions": {"pozice", "positions"},
-    "orders": {"pokyny", "objednávky", "orders"},
-    "deals": {"nabídky", "obchody", "deals"},
-    "results": {"výsledky", "results"},
-}
-
-# Mapa názvu sloupce -> interní klíč. Duplicitní názvy (Čas, Cena) se řeší
-# pořadím výskytu v hlavičce.
-_COLUMN_ALIASES = {
-    "čas": "time",
-    "time": "time",
-    "čas otevření": "time",
-    "open time": "time",
-    "pozice": "ticket",
-    "position": "ticket",
-    "obchod": "ticket",
-    "deal": "ticket",
-    "pokyn": "order",
-    "order": "order",
-    "symbol": "symbol",
-    "typ": "type",
-    "type": "type",
-    "směr": "entry",
-    "direction": "entry",
-    "objem": "volume",
-    "volume": "volume",
-    "cena": "price",
-    "price": "price",
-    "s / l": "sl",
-    "s/l": "sl",
-    "realizovat zisk": "tp",
-    "t / p": "tp",
-    "t/p": "tp",
-    "take profit": "tp",
-    "provize": "commission",
-    "commission": "commission",
-    "poplatek": "fee",
-    "fee": "fee",
-    "swap": "swap",
-    "zisk": "profit",
-    "profit": "profit",
-    "zůstatek": "balance",
-    "balance": "balance",
-    "komentář": "comment",
-    "comment": "comment",
-    "stav": "state",
-    "state": "state",
-}
-
-_META_ALIASES = {
-    "jméno": "name",
-    "name": "name",
-    "účet": "account",
-    "account": "account",
-    "firma": "company",
-    "company": "company",
-    "broker": "company",
-    "datum": "exported_at",
-    "date": "exported_at",
-}
-
-
-# ---------------------------------------------------------------------------
-# Pomocné převodní funkce
-# ---------------------------------------------------------------------------
-
-
-def _norm(value: Any) -> str:
-    """Normalizuje buňku na porovnatelný text (bez diakritických rozdílů v mezerách)."""
-    if value is None:
-        return ""
-    return re.sub(r"\s+", " ", str(value)).strip().strip(":").lower()
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    """
-    Převede buňku na desetinné číslo.
-
-    Zvládá formáty jako '1 234,56', '0.5 / 0' (částečně plněné pokyny) i prázdné
-    buňky; u nečíselných hodnot vrací výchozí hodnotu.
-    """
-    if value is None or value == "":
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    # U pokynů má objem tvar "požadováno / plněno" – bereme první číslo
-    if "/" in text:
-        text = text.split("/")[0]
-    text = text.replace(" ", "").replace(" ", "").replace(",", ".")
-    text = re.sub(r"[^0-9.\-+eE]", "", text)
-    try:
-        return float(text)
-    except ValueError:
-        return default
-
-
-def _to_optional_float(value: Any) -> Optional[float]:
-    """Jako _to_float, ale prázdné či nečíselné hodnoty vrací jako None."""
-    if value is None or str(value).strip() == "":
-        return None
-    result = _to_float(value, default=float("nan"))
-    return None if result != result else result
-
-
-_DATE_FORMATS = (
-    "%Y.%m.%d %H:%M:%S",
-    "%Y.%m.%d %H:%M",
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%d.%m.%Y %H:%M:%S",
-    "%Y.%m.%d",
-    "%Y-%m-%d",
-)
-
-
-def _to_datetime(value: Any) -> Optional[datetime]:
-    """Převede buňku na datetime; podporuje běžné formáty MT5 i nativní datum z Excelu."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value
-    text = str(value).strip()
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _header_map(row: List[Any]) -> Dict[str, int]:
-    """
-    Vytvoří mapu interní klíč -> index sloupce z hlavičkového řádku.
-
-    Duplicitní názvy dostávají příponu '_2' (v sekci pozic jsou dva sloupce
-    "Čas" a dva "Cena" – otevírací a zavírací).
-    """
-    mapping: Dict[str, int] = {}
-    seen: Dict[str, int] = {}
-    for index, cell in enumerate(row):
-        key = _COLUMN_ALIASES.get(_norm(cell))
-        if not key:
-            continue
-        seen[key] = seen.get(key, 0) + 1
-        name = key if seen[key] == 1 else f"{key}_{seen[key]}"
-        mapping[name] = index
-    return mapping
-
-
-def _cell(row: List[Any], mapping: Dict[str, int], key: str) -> Any:
-    """Bezpečně vytáhne hodnotu sloupce podle interního klíče."""
-    index = mapping.get(key)
-    if index is None or index >= len(row):
-        return None
-    return row[index]
-
-
-def _is_blank(row: List[Any]) -> bool:
-    """Řádek je prázdný, pokud neobsahuje žádnou neprázdnou buňku."""
-    return all(cell is None or str(cell).strip() == "" for cell in row)
-
-
-# ---------------------------------------------------------------------------
-# Hlavní načtení
+# Načtení CSV
 # ---------------------------------------------------------------------------
 
 
 def load_report(path: str) -> Mt5Report:
     """
-    Načte MT5 export a vrátí strukturovaná data.
+    Načte CSV ze skriptu ExportHistory.mq5 a vrátí strukturovaná data.
 
-    :param path: cesta k souboru ReportHistory-*.xlsx
-    :raises ValueError: pokud sešit neobsahuje rozpoznatelnou sekci pozic ani obchodů
+    :param path: cesta k souboru ReportHistory-<účet>.csv
+    :raises ValueError: soubor nelze přečíst nebo nemá očekávaný formát
     """
-    import openpyxl
-
-    # openpyxl varuje u MT5 sešitů na chybějící výchozí styl – pro uživatele nepodstatné
+    # Jiný soubor (typicky export XLSX nebo HTML přímo z MetaTraderu) se pozná
+    # podle chybějící verze formátu nebo podle toho, že není textem v UTF-8
+    not_export = (
+        f"Soubor {path} není export ze skriptu ExportHistory ve formátu verze "
+        f"{SUPPORTED_FORMAT}. Export XLSX či HTML z MetaTraderu 5 se nepodporuje – "
+        "historii vyexportujte aktuální verzí skriptu ExportHistory (mql5/ExportHistory.mq5)."
+    )
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            workbook = openpyxl.load_workbook(path, data_only=True, read_only=False)
-    except Exception as exc:
-        raise ValueError(
-            f"Soubor {path} se nepodařilo otevřít jako sešit Excelu. "
-            "Očekává se export 'Historie obchodování' z MetaTraderu 5 ve formátu .xlsx. "
-            f"Podrobnost: {exc}"
-        ) from exc
+        # utf-8-sig snese i BOM, který přidá Excel při uložení jako "CSV UTF-8";
+        # řádky s komentářem (#) přeskočíme
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            rows = [row for row in csv.reader(handle, delimiter=";")
+                    if not (row and row[0].startswith("#"))]
+    except UnicodeDecodeError as exc:
+        raise ValueError(not_export) from exc
+    except (OSError, csv.Error) as exc:
+        raise ValueError(f"Soubor {path} se nepodařilo přečíst: {exc}") from exc
 
-    sheet = workbook.active
-    rows: List[List[Any]] = [
-        [sheet.cell(r, c).value for c in range(1, sheet.max_column + 1)]
-        for r in range(1, sheet.max_row + 1)
-    ]
+    # Údaje o účtu končí prvním prázdným řádkem, za ním je tabulka obchodů
+    separator = next((i for i, row in enumerate(rows) if not any(cell.strip() for cell in row)),
+                     len(rows))
+    meta = {row[0].strip().lower(): row[1].strip() for row in rows[:separator] if len(row) >= 2}
+    if meta.get("format") != SUPPORTED_FORMAT:
+        raise ValueError(not_export)
+    table = [row for row in rows[separator + 1:] if any(row)]
+    if not table:
+        raise ValueError(f"V souboru {path} chybí tabulka obchodů.")
 
-    account = _parse_account(rows)
-    sections = _locate_sections(rows)
+    header = [name.strip().lower() for name in table[0]]
+    missing = _REQUIRED_COLUMNS - set(header)
+    if missing:
+        raise ValueError(f"V souboru {path} chybí sloupce: {', '.join(sorted(missing))}.")
 
-    positions = _parse_positions(rows, sections.get("positions"))
-    deals = _parse_deals(rows, sections.get("deals"))
-    summary = _parse_summary(rows, sections.get("results"))
+    try:
+        deals = [_parse_deal(dict(zip(header, row))) for row in table[1:]]
+    except (ValueError, KeyError) as exc:
+        raise ValueError(f"Soubor {path} obsahuje neplatný řádek obchodu: {exc}") from exc
+    deals = sorted((deal for deal in deals if deal is not None), key=lambda d: (d.time, d.ticket))
 
-    if not positions and not deals:
-        raise ValueError(
-            f"V souboru {path} se nepodařilo najít sekci s pozicemi ani obchody. "
-            "Očekává se export 'Historie obchodování' z MetaTraderu 5."
-        )
+    # Počáteční kapitál = první vklad; když v historii chybí (historie nezačíná
+    # od založení účtu), odvodí se ze zůstatku při exportu minus všechny změny
+    balance_before_first_deal = _to_float(meta.get("balance", "")) - sum(
+        deal.profit + deal.commission + deal.fee + deal.swap for deal in deals)
+    initial_balance = next((deal.profit for deal in deals if deal.deal_type == "balance"),
+                           balance_before_first_deal)
 
-    # Pokud sekce pozic chybí (některé exporty ji nemají), sestavíme pozice z obchodů
-    if not positions and deals:
-        positions = _positions_from_deals(deals)
-
-    report = Mt5Report(
-        account=account,
-        positions=sorted(positions, key=lambda p: p.close_time or datetime.min),
+    return Mt5Report(
+        account=_parse_account(meta),
+        initial_balance=initial_balance,
+        positions=_build_positions(deals),
         deals=deals,
-        summary=summary,
         source_file=path,
     )
-    return report
 
 
-def _parse_account(rows: List[List[Any]]) -> AccountInfo:
-    """Vytáhne údaje o účtu z prvních řádků sešitu (hledá dvojice popisek/hodnota)."""
-    info = AccountInfo()
-    for row in rows[:12]:
-        label = _norm(row[0] if row else None)
-        key = _META_ALIASES.get(label)
-        if not key:
-            continue
-        # Hodnota je v první neprázdné buňce vpravo od popisku (bývá sloučená)
-        value = next((str(c).strip() for c in row[1:] if c is not None and str(c).strip()), "")
-        setattr(info, key, value)
-
-    # Z řetězce účtu typu "498754 (USD, FTTrading-Server, demo, Hedge)" vytáhneme měnu a server
-    match = re.match(r"^\s*(\S+)\s*\((.*)\)\s*$", info.account)
-    if match:
-        parts = [p.strip() for p in match.group(2).split(",")]
-        if parts:
-            info.currency = parts[0]
-        if len(parts) > 1:
-            info.server = parts[1]
-    return info
-
-
-def _locate_sections(rows: List[List[Any]]) -> Dict[str, int]:
+def _parse_account(meta: Dict[str, str]) -> AccountInfo:
     """
-    Najde indexy řádků, na kterých začínají jednotlivé sekce.
+    Sestaví údaje o účtu z hlavičky CSV.
 
-    Sekční řádek poznáme podle toho, že má vyplněnou pouze první buňku a její
-    text odpovídá známému názvu sekce.
+    Řetězec účtu má stejný tvar jako v hlavičce reportu MetaTraderu:
+    "498754 (USD, FTTrading-Server, demo, Hedge)".
     """
-    found: Dict[str, int] = {}
-    for index, row in enumerate(rows):
-        if not row:
-            continue
-        label = _norm(row[0])
-        if not label:
-            continue
-        rest_empty = all(c is None or str(c).strip() == "" for c in row[1:])
-        if not rest_empty:
-            continue
-        for section, aliases in _SECTION_ALIASES.items():
-            if label in aliases and section not in found:
-                found[section] = index
-    return found
+    details = [meta.get(key, "") for key in ("currency", "server", "trade_mode", "margin_mode")]
+    details = [value for value in details if value]
+    login = meta.get("login", "")
+    return AccountInfo(
+        name=meta.get("name", ""),
+        account=f"{login} ({', '.join(details)})" if details else login,
+        company=meta.get("company", ""),
+        exported_at=meta.get("exported", ""),
+        currency=meta.get("currency", ""),
+    )
 
 
-def _section_rows(rows: List[List[Any]], start: Optional[int]):
+def _parse_deal(row: Dict[str, str]) -> Optional[Deal]:
     """
-    Generátor datových řádků sekce.
+    Převede řádek tabulky na obchod.
 
-    Vrací dvojici (mapa sloupců, řádek). Sekce končí prvním prázdným řádkem
-    nebo řádkem, který vypadá jako začátek další sekce.
+    Typy bez vlivu na zůstatek (kredit, zrušené obchody) vrací jako None,
+    ostatní neobchodní typy sjednotí na 'balance'.
     """
-    if start is None:
-        return
-    if start + 1 >= len(rows):
-        return
-    mapping = _header_map(rows[start + 1])
-    if not mapping:
-        return
-    for row in rows[start + 2:]:
-        if _is_blank(row):
-            break
-        label = _norm(row[0])
-        if any(label in aliases for aliases in _SECTION_ALIASES.values()):
-            break
-        yield mapping, row
+    deal_type = row["type"].strip().lower()
+    if deal_type in _NO_BALANCE_TYPES:
+        return None
+    if deal_type not in ("buy", "sell"):
+        deal_type = "balance"
+    return Deal(
+        # Čas je ve tvaru MT5 "RRRR.MM.DD HH:MM:SS"; fromisoformat je výrazně
+        # rychlejší než strptime, stačí nahradit tečky v datu pomlčkami
+        time=datetime.fromisoformat(row["time"].strip().replace(".", "-")),
+        ticket=int(row["deal"]),
+        position=row["position"].strip(),
+        symbol=row["symbol"].strip(),
+        deal_type=deal_type,
+        entry=row["entry"].strip().lower(),
+        volume=_to_float(row["volume"]),
+        price=_to_float(row["price"]),
+        commission=_to_float(row["commission"]),
+        fee=_to_float(row["fee"]),
+        swap=_to_float(row["swap"]),
+        profit=_to_float(row["profit"]),
+        magic=int(row["magic"]),
+    )
 
 
-def _parse_positions(rows: List[List[Any]], start: Optional[int]) -> List[Position]:
-    """Načte sekci "Pozice" – uzavřené obchody s otevíracími a zavíracími údaji."""
-    positions: List[Position] = []
-    for mapping, row in _section_rows(rows, start):
-        ticket = _cell(row, mapping, "ticket")
-        direction = _norm(_cell(row, mapping, "type"))
-        # Souhrnné řádky na konci sekce nemají ticket ani směr – ty přeskočíme
-        if not ticket or direction not in ("buy", "sell"):
-            continue
-        positions.append(
-            Position(
-                ticket=str(ticket).strip(),
-                symbol=str(_cell(row, mapping, "symbol") or "").strip(),
-                direction=direction,
-                volume=_to_float(_cell(row, mapping, "volume")),
-                open_time=_to_datetime(_cell(row, mapping, "time")),
-                close_time=_to_datetime(_cell(row, mapping, "time_2")),
-                open_price=_to_optional_float(_cell(row, mapping, "price")),
-                close_price=_to_optional_float(_cell(row, mapping, "price_2")),
-                stop_loss=_to_optional_float(_cell(row, mapping, "sl")),
-                take_profit=_to_optional_float(_cell(row, mapping, "tp")),
-                commission=_to_float(_cell(row, mapping, "commission")),
-                swap=_to_float(_cell(row, mapping, "swap")),
-                gross_profit=_to_float(_cell(row, mapping, "profit")),
-            )
+def _to_float(text: str) -> float:
+    """Převede číslo z CSV (desetinná tečka); prázdná hodnota je 0."""
+    text = (text or "").strip()
+    return float(text) if text else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Sestavení pozic z obchodů
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _OpenTrade:
+    """
+    Rozpracovaná pozice při procházení obchodů.
+
+    Sčítá objemy, ceny vážené objemem a peněžní složky všech obchodů pozice.
+    """
+
+    ticket: str
+    symbol: str
+    direction: str
+    magic: int
+    open_time: datetime
+    open_volume: float = 0.0
+    open_value: float = 0.0        # součet objem × cena vstupů
+    close_volume: float = 0.0
+    close_value: float = 0.0       # součet objem × cena výstupů
+    close_time: Optional[datetime] = None
+    commission: float = 0.0
+    swap: float = 0.0
+    profit: float = 0.0
+
+    @property
+    def remaining(self) -> float:
+        """Dosud neuzavřený objem."""
+        return self.open_volume - self.close_volume
+
+    def add_entry(self, deal: Deal, volume: float) -> None:
+        """Započítá vstup (otevření nebo navýšení pozice) o daném objemu."""
+        self.open_volume += volume
+        self.open_value += volume * deal.price
+
+    def add_exit(self, deal: Deal, volume: float) -> None:
+        """Započítá výstup (částečné nebo úplné uzavření) o daném objemu."""
+        self.close_volume += volume
+        self.close_value += volume * deal.price
+        self.close_time = deal.time
+
+    def add_money(self, deal: Deal) -> None:
+        """Přičte peněžní složky obchodu; poplatek (fee) se počítá do provize."""
+        self.commission += deal.commission + deal.fee
+        self.swap += deal.swap
+        self.profit += deal.profit
+
+    def to_position(self) -> Position:
+        """Vytvoří z uzavřeného obchodu pozici s průměrnými cenami."""
+        return Position(
+            ticket=self.ticket,
+            symbol=self.symbol,
+            direction=self.direction,
+            volume=self.open_volume,
+            open_time=self.open_time,
+            close_time=self.close_time,
+            open_price=self.open_value / self.open_volume if self.open_volume else None,
+            close_price=self.close_value / self.close_volume if self.close_volume else None,
+            commission=self.commission,
+            swap=self.swap,
+            gross_profit=self.profit,
+            magic=self.magic,
         )
-    return positions
 
 
-def _parse_deals(rows: List[List[Any]], start: Optional[int]) -> List[Deal]:
-    """Načte sekci obchodů ("Nabídky"/"Deals") včetně vkladů a průběžného zůstatku."""
-    deals: List[Deal] = []
-    for mapping, row in _section_rows(rows, start):
-        ticket = _cell(row, mapping, "ticket")
-        time = _to_datetime(_cell(row, mapping, "time"))
-        # Poslední řádek sekce je součet – nemá čas ani ticket
-        if not ticket or time is None:
-            continue
-        deals.append(
-            Deal(
-                time=time,
-                ticket=str(ticket).strip(),
-                symbol=str(_cell(row, mapping, "symbol") or "").strip(),
-                deal_type=_norm(_cell(row, mapping, "type")),
-                entry=_norm(_cell(row, mapping, "entry")),
-                volume=_to_optional_float(_cell(row, mapping, "volume")),
-                price=_to_optional_float(_cell(row, mapping, "price")),
-                commission=_to_float(_cell(row, mapping, "commission")),
-                fee=_to_float(_cell(row, mapping, "fee")),
-                swap=_to_float(_cell(row, mapping, "swap")),
-                profit=_to_float(_cell(row, mapping, "profit")),
-                balance=_to_optional_float(_cell(row, mapping, "balance")),
-                comment=str(_cell(row, mapping, "comment") or "").strip(),
-                order=str(_cell(row, mapping, "order") or "").strip(),
-            )
-        )
-    return deals
-
-
-def _parse_summary(rows: List[List[Any]], start: Optional[int]) -> Dict[str, Any]:
+def _build_positions(deals: List[Deal]) -> List[Position]:
     """
-    Načte sekci "Výsledky" jako volný slovník popisek -> hodnota.
+    Sestaví uzavřené pozice z obchodů seskupených podle čísla pozice.
 
-    Řádky obsahují více dvojic vedle sebe, proto procházíme buňky po dvojicích
-    popisek/první neprázdná hodnota vpravo.
+    Hedge účet: pozice = vstupní obchod(y) + výstupní obchod(y). Netting účet
+    může pozici jedním obchodem otočit ('inout'); ten uzavře dosavadní objem
+    a zbytek otevře jako novou pozici se stejným číslem (ticket s příponou).
+    Pozice, které ještě nejsou úplně uzavřené, se vynechají.
     """
-    summary: Dict[str, Any] = {}
-    if start is None:
-        return summary
-    for row in rows[start + 1:]:
-        if _is_blank(row):
-            continue
-        index = 0
-        while index < len(row):
-            cell = row[index]
-            text = str(cell).strip() if cell is not None else ""
-            if text.endswith(":"):
-                label = text.rstrip(":").strip()
-                value = None
-                for probe in range(index + 1, len(row)):
-                    if row[probe] is not None and str(row[probe]).strip():
-                        # Další popisek znamená, že hodnota chybí
-                        if str(row[probe]).strip().endswith(":"):
-                            break
-                        value = row[probe]
-                        index = probe
-                        break
-                summary[label] = value
-            index += 1
-    return summary
-
-
-def _positions_from_deals(deals: List[Deal]) -> List[Position]:
-    """
-    Nouzová rekonstrukce pozic z obchodů, pokud export sekci pozic neobsahuje.
-
-    Páruje vstupní ('in') a výstupní ('out') obchod podle symbolu v pořadí FIFO.
-    """
-    open_deals: Dict[str, List[Deal]] = {}
+    open_trades: Dict[str, _OpenTrade] = {}
+    segments: Dict[str, int] = {}
     positions: List[Position] = []
+
+    def start_trade(deal: Deal, volume: float) -> _OpenTrade:
+        # Další úseky téže pozice (po otočení) dostanou do čísla příponu "-2", "-3"…,
+        # aby byl ticket v reportu jednoznačný
+        segments[deal.position] = segments.get(deal.position, 0) + 1
+        count = segments[deal.position]
+        ticket = deal.position if count == 1 else f"{deal.position}-{count}"
+        trade = _OpenTrade(ticket, deal.symbol, deal.deal_type, deal.magic, deal.time)
+        trade.add_entry(deal, volume)
+        open_trades[deal.position] = trade
+        return trade
+
     for deal in deals:
-        if deal.deal_type not in ("buy", "sell"):
+        if deal.deal_type not in ("buy", "sell") or deal.position in ("", "0"):
             continue
+        trade = open_trades.get(deal.position)
+
+        # Vstup do pozice: nová pozice, nebo navýšení otevřené
         if deal.entry == "in":
-            open_deals.setdefault(deal.symbol, []).append(deal)
-        elif deal.entry == "out":
-            queue = open_deals.get(deal.symbol)
-            if not queue:
-                continue
-            entry_deal = queue.pop(0)
-            positions.append(
-                Position(
-                    # Číslo pozice v MT5 je číslo pokynu, který ji otevřel; jen
-                    # podle něj lze pozici spárovat s magic numbers z CSV
-                    ticket=entry_deal.order or entry_deal.ticket,
-                    symbol=deal.symbol,
-                    # Směr pozice je opačný než uzavírací obchod
-                    direction="buy" if deal.deal_type == "sell" else "sell",
-                    volume=deal.volume or 0.0,
-                    open_time=entry_deal.time,
-                    close_time=deal.time,
-                    open_price=entry_deal.price,
-                    close_price=deal.price,
-                    stop_loss=None,
-                    take_profit=None,
-                    commission=entry_deal.commission + deal.commission,
-                    swap=entry_deal.swap + deal.swap,
-                    gross_profit=deal.profit,
-                )
-            )
-    return positions
+            if trade is None:
+                trade = start_trade(deal, deal.volume)
+            else:
+                trade.add_entry(deal, deal.volume)
+            trade.add_money(deal)
+            continue
+        # Výstup bez známého vstupu (historie začíná uprostřed pozice) nelze sestavit
+        if trade is None:
+            continue
+
+        # Výstup: uzavře nejvýše zbývající objem; u otočení ('inout') zbytek
+        # objemu otevře novou pozici opačného směru
+        closing = min(deal.volume, trade.remaining)
+        trade.add_exit(deal, closing)
+        trade.add_money(deal)
+        if trade.remaining <= _VOLUME_EPSILON:
+            positions.append(trade.to_position())
+            del open_trades[deal.position]
+        reversed_volume = deal.volume - closing
+        if deal.entry == "inout" and reversed_volume > _VOLUME_EPSILON:
+            start_trade(deal, reversed_volume)
+
+    return sorted(positions, key=lambda p: p.close_time or datetime.min)

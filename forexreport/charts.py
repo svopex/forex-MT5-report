@@ -391,14 +391,14 @@ def _strategy_series(strategies: Sequence[StrategyMetrics],
     Připraví řady pro graf průběhu strategií.
 
     Barva patří strategii, ne jejímu pořadí podle výsledku: strategie se
-    řadí podle magic number (neznámé na konec) a barvy se přidělují v pevném
+    řadí podle magic number a barvy se přidělují v pevném
     pořadí palety. Při více strategiích, než má paleta barev, si vlastní
     barvu ponechají ty s nejvýraznějším výsledkem a ostatní se sloučí do
     jedné šedé řady "Ostatní".
 
     :return: seznam čtveřic (popisek, barva, časy, hodnoty)
     """
-    ordered = sorted(strategies, key=lambda s: s.magic_order)
+    ordered = sorted(strategies, key=lambda s: s.magic)
     folded: List[StrategyMetrics] = []
     if len(ordered) > MAX_STRATEGY_SERIES:
         # Magic number je mezi strategiemi jedinečné, slouží proto jako klíč

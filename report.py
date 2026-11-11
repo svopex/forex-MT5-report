@@ -3,7 +3,7 @@
 Spouštěč aplikace pro tvorbu PDF reportů z historie obchodování MetaTrader 5.
 
 Příklad:
-    python report.py ReportHistory-498754.xlsx month=last
+    python report.py ReportHistory-498754.csv month=last
 """
 
 import sys

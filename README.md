@@ -1,14 +1,16 @@
 # Forex Report
 
-Generátor moderních reportů z historie obchodování **MetaTrader 5**
-(soubor `ReportHistory-*.xlsx`). Aplikace se spouští z příkazové řádky,
-spočítá běžné obchodní metriky za zvolené období a vysází přehledný report
-ve formátu A4 na šířku – jako PDF, nebo jako jeden dlouhý PNG.
+Generátor moderních reportů z historie obchodování **MetaTrader 5**.
+Historii účtu vyexportuje přímo v terminálu skript `mql5/ExportHistory.mq5`
+do souboru `ReportHistory-<účet>.csv` (viz [Export historie z MetaTraderu 5](#export-historie-z-metatraderu-5)).
+Aplikace se spouští z příkazové řádky, spočítá běžné obchodní metriky za
+zvolené období a vysází přehledný report ve formátu A4 na šířku – jako PDF,
+nebo jako jeden dlouhý PNG.
 
 První strana je **zhuštěný přehled**, který se celý vejde na jednu obrazovku;
 teprve další strany rozvádějí analýzu výkonnosti, podrobné ukazatele a seznam
-jednotlivých obchodů. S doplňkovým souborem magic numbers report navíc
-rozdělí obchody **podle strategií** (viz [Magic numbers a strategie](#magic-numbers-a-strategie)).
+jednotlivých obchodů. Podle magic number report navíc rozdělí obchody
+**podle strategií**.
 
 ---
 
@@ -31,16 +33,17 @@ parametry se neptá vůbec:
 ./spustit-linux.sh                                    # zeptá se na vše
 ./spustit-linux.sh --month=last                       # zeptá se jen na formát
 ./spustit-linux.sh --day=last --format=png            # nezeptá se na nic
-./spustit-linux.sh ReportHistory-498754.xlsx --all -f both
+./spustit-linux.sh ReportHistory-498754.csv --all -f both
 ```
 
 ```bat
 spustit-windows.bat
 spustit-windows.bat --month=last
-spustit-windows.bat ReportHistory-498754.xlsx --day=last --format=png
+spustit-windows.bat ReportHistory-498754.csv --day=last --format=png
 ```
 
-Je-li v adresáři jediný soubor `.xlsx`, použije se automaticky bez ptaní.
+Je-li v adresáři jediný export `ReportHistory-*.csv`, použije se automaticky
+bez ptaní; při více účtech se spouštěč zeptá, který použít.
 
 Na macOS a Linuxu je při prvním použití potřeba nastavit právo ke spuštění:
 
@@ -79,7 +82,6 @@ Závislosti:
 
 | Balíček | K čemu slouží |
 |---|---|
-| `openpyxl` | čtení exportu `.xlsx` z MetaTraderu 5 |
 | `matplotlib` | vykreslení grafů |
 | `reportlab` | sazba výsledného PDF |
 | `pypdfium2` + `pillow` | export do jednoho dlouhého PNG |
@@ -94,21 +96,21 @@ tyto fonty obsahují českou diakritiku.
 ## Použití
 
 ```bash
-python report.py <soubor.xlsx> [období] [přepínače]
+python report.py <soubor.csv> [období] [přepínače]
 ```
 
 Na **pořadí parametrů nezáleží** a období lze zadat dvěma rovnocennými způsoby –
 přepínačem s pomlčkami, nebo zápisem bez nich:
 
 ```bash
-python report.py ReportHistory-498754.xlsx --all
-python report.py ReportHistory-498754.xlsx --year=2026
-python report.py --month=last ReportHistory-498754.xlsx
-python report.py --week=20260825 -o tyden.pdf ReportHistory-498754.xlsx
-python report.py ReportHistory-498754.xlsx --day=last -q
-python report.py ReportHistory-498754.xlsx --from=20260801
+python report.py ReportHistory-498754.csv --all
+python report.py ReportHistory-498754.csv --year=2026
+python report.py --month=last ReportHistory-498754.csv
+python report.py --week=20260825 -o tyden.pdf ReportHistory-498754.csv
+python report.py ReportHistory-498754.csv --day=last -q
+python report.py ReportHistory-498754.csv --from=20260801
 
-python report.py ReportHistory-498754.xlsx month=202608     # zápis bez pomlček
+python report.py ReportHistory-498754.csv month=202608     # zápis bez pomlček
 ```
 
 Bez zadaného období se použije celé období. Uvedete-li období dvakrát
@@ -121,10 +123,10 @@ jen jsou všechny strany poskládané pod sebe do jediného obrázku. Hodí se p
 sdílení v chatu nebo vložení na web, kde je PDF nepohodlné.
 
 ```bash
-python report.py ReportHistory-498754.xlsx month=last --format png
-python report.py ReportHistory-498754.xlsx month=last -o report.png
-python report.py ReportHistory-498754.xlsx month=last --format both
-python report.py ReportHistory-498754.xlsx month=last --format png --dpi 220
+python report.py ReportHistory-498754.csv month=last --format png
+python report.py ReportHistory-498754.csv month=last -o report.png
+python report.py ReportHistory-498754.csv month=last --format both
+python report.py ReportHistory-498754.csv month=last --format png --dpi 220
 ```
 
 Obrázek vzniká vykreslením hotového PDF, takže je s ním shodný do posledního
@@ -162,7 +164,6 @@ V zadání data lze používat i oddělovače (`2026-08-25`, `2026.08.25`).
 | `-o`, `--output` | cesta k výstupnímu souboru (výchozí: `<vstup>-<období>.pdf` vedle vstupního souboru); koncovka `.png` přepne výstup na obrázek |
 | `-f`, `--format` | `pdf` (výchozí), `png` (jeden dlouhý obrázek) nebo `both` |
 | `--dpi` | rozlišení PNG, 72–300 (výchozí 150) |
-| `--magic` | soubor s magic numbers (výchozí: `MagicNumbers-<účet>.csv` vedle vstupního souboru, pokud existuje) – viz [Magic numbers a strategie](#magic-numbers-a-strategie) |
 | `-q`, `--quiet` | vypisovat pouze chyby |
 | `--print-path` | vypsat pouze cestu k vytvořenému PDF (pro skripty) |
 | `--debug` | při chybě vypsat podrobný výpis zásobníku volání |
@@ -172,11 +173,13 @@ V zadání data lze používat i oddělovače (`2026-08-25`, `2026.08.25`).
 Návratové kódy: `0` úspěch, `1` chyba při čtení souboru nebo sazbě PDF,
 `2` chybné zadání parametrů.
 
-### Magic numbers a strategie
+### Export historie z MetaTraderu 5
 
-Standardní export historie z MetaTraderu 5 **magic number neobsahuje**. Proto je
-v projektu skript `mql5/ExportMagicNumbers.mq5`, který ho z terminálu
-vyexportuje do doplňkového souboru `MagicNumbers-<účet>.csv`.
+Vstupem aplikace je soubor `ReportHistory-<účet>.csv`, který v terminálu
+vytváří skript `mql5/ExportHistory.mq5`. Obsahuje údaje o účtu a všechny
+obchody (deals) včetně vkladů a výběrů – na rozdíl od exportu historie, který
+nabízí MetaTrader, i s **číslem pozice a magic number** u každého obchodu.
+Jeden soubor tak stačí na celý report včetně rozdělení podle strategií.
 
 Jednorázová instalace skriptu – automaticky do **všech nainstalovaných MT5**
 na Windows:
@@ -199,19 +202,17 @@ hned neobjeví, klikněte na *Skripty* pravým tlačítkem → *Obnovit*.
 Ruční instalace (jiný systém nebo jediný terminál):
 
 1. V MetaTraderu 5 otevřete *Soubor → Otevřít složku dat*.
-2. Zkopírujte `mql5/ExportMagicNumbers.mq5` do podsložky `MQL5/Scripts`.
+2. Zkopírujte `mql5/ExportHistory.mq5` do podsložky `MQL5/Scripts`.
 3. V *Navigátoru* klikněte na *Skripty* pravým tlačítkem → *Obnovit*
    (případně skript otevřete v MetaEditoru a přeložte klávesou F7).
 
-Export (pokaždé spolu s exportem `ReportHistory-*.xlsx`):
+Export (pokaždé, když chcete report s aktuálními daty):
 
-1. Přetáhněte skript *ExportMagicNumbers* z *Navigátoru* (záložka *Obecné*,
+1. Přetáhněte skript *ExportHistory* z *Navigátoru* (záložka *Obecné*,
    složka *Skripty*) na libovolný graf a potvrďte.
-2. Skript zapíše `MagicNumbers-<účet>.csv` do adresáře ze vstupu *InpOutputDir* –
-   po instalaci přes `deploy.cmd` je to adresář projektu – a ukáže, kam soubor
-   uložil. Uložte do stejného adresáře i export `ReportHistory-<účet>.xlsx`;
-   aplikace pak soubor s magic numbers najde sama podle čísla účtu. Jinde ho lze
-   zadat přepínačem `--magic`.
+2. Skript zapíše `ReportHistory-<účet>.csv` do adresáře ze vstupu
+   *InpOutputDir* – po instalaci přes `deploy.cmd` je to adresář projektu –
+   a ukáže, kam soubor uložil. Starší export téhož účtu přepíše.
 
 MQL5 smí sám zapisovat jen do `MQL5\Files` ve složce dat. Skript proto soubor
 vytvoří tam a do *InpOutputDir* ho přesune funkcí Windows, což vyžaduje povolený
@@ -219,28 +220,19 @@ vytvoří tam a do *InpOutputDir* ho přesune funkcí Windows, což vyžaduje po
 zaškrtnutí na záložce *Závislosti* při spuštění skriptu). Je-li *InpOutputDir*
 prázdný (ruční instalace), import DLL není povolen nebo přesun selže (adresář
 neexistuje, soubor je otevřený v Excelu), soubor zůstane v `MQL5\Files`, skript
-ohlásí proč a soubor je potřeba zkopírovat vedle `ReportHistory-<účet>.xlsx` ručně.
+ohlásí proč a soubor je potřeba zkopírovat do adresáře projektu ručně.
 
-```bash
-python report.py ReportHistory-498754.xlsx --month=last                  # najde MagicNumbers-498754.csv sám
-python report.py ReportHistory-498754.xlsx --magic=export/magic.csv
-```
+Export XLSX z MetaTraderu (*Report → Open XML*) aplikace nepodporuje – nemá
+u obchodů číslo pozice ani magic number. Exporty `ReportHistory-*.csv` obsahují
+údaje o účtu, proto jsou v `.gitignore` a do repozitáře se neukládají.
 
-Soubor má jednoduchý formát `position;magic;symbol;time` a páruje se s pozicemi
-podle čísla pozice (sloupec *Pozice* v exportu). Magic number pozice je magic
-number obchodu, který ji otevřel; ruční obchody mají magic number `0`.
+Magic number pozice je magic number obchodu, který ji otevřel; ruční obchody
+mají magic number `0`. Report podle něj:
 
-S načtenými magic numbers report:
-
-* přidá do **seznamu obchodů** sloupec *Magic*,
+* vypíše v **seznamu obchodů** sloupec *Magic*,
 * jsou-li ve zvoleném období **alespoň dvě strategie**, přidá před seznam
   obchodů srovnávací stranu strategií a pro každou strategii jednu stranu
   (viz [Obsah reportu](#strany-podle-strategie)).
-
-Pokud v souboru některé pozice chybí (soubor je starší než export historie),
-aplikace to ohlásí a tyto obchody v reportu seskupí jako *Bez magic number*.
-Nečitelný automaticky nalezený soubor jen ohlásí a report vytvoří bez
-rozdělení podle strategií; chyba v souboru zadaném přes `--magic` je fatální.
 
 ---
 
@@ -285,7 +277,7 @@ symbolů a směru – histogram ani dny v týdnu pro jediný den nedávají smys
 
 ### Strany podle strategie
 
-Jen s načtenými magic numbers a při alespoň dvou strategiích v období.
+Jen při alespoň dvou strategiích (magic numbers) v období.
 U jediné strategie by strany jen opakovaly report celého účtu.
 
 **Přehled strategií** (jedna strana):
@@ -310,8 +302,8 @@ v tabulce):
 ### Seznam obchodů (poslední strany)
 
 Kompletní tabulka uzavřených pozic (čas otevření a uzavření včetně vteřin,
-magic number – je-li k dispozici, symbol, směr, objem, ceny, provize, swap,
-hrubý zisk a čistý výsledek).
+magic number, symbol, směr, objem, ceny, provize, swap, hrubý zisk a čistý
+výsledek).
 
 ---
 
@@ -325,21 +317,26 @@ a poslední znak, mezi nimi jsou tři hvězdičky:
 ```
 
 Plné číslo se do PDF nedostane ani do jeho textové vrstvy nebo metadat, takže
-report lze bez obav sdílet. Totéž platí pro název souboru s magic numbers,
-který číslo účtu obsahuje – v reportu se neuvádí. Doplňující údaje v závorce (měna, server, typ účtu)
+report lze bez obav sdílet. Totéž platí pro název vstupního souboru, který
+číslo účtu obsahuje – v reportu se neuvádí. Doplňující údaje v závorce (měna, server, typ účtu)
 zůstávají čitelné, protože pro pochopení reportu jsou podstatné.
 
 ---
 
 ## Jak se metriky počítají
 
-* **Obchod = jedna uzavřená pozice** ze sekce *Pozice* v exportu.
-* **Čistý výsledek obchodu** = zisk + provize + swap. Součet čistých výsledků
-  proto přesně odpovídá změně zůstatku účtu.
+* **Obchod = jedna uzavřená pozice**, sestavená z obchodů (deals) se stejným
+  číslem pozice. Otevírací a zavírací cena jsou průměry vážené objemem
+  (u postupného navyšování či částečného uzavírání). Pozice, které ještě
+  nejsou úplně uzavřené, se nezapočítávají.
+* **Čistý výsledek obchodu** = zisk + provize + swap; poplatky (*fee*) se
+  počítají do provize. Součet čistých výsledků proto přesně odpovídá změně
+  zůstatku účtu.
 * Obchod patří do období podle **času uzavření** – realizovaný zisk se počítá
   do období, ve kterém byl realizován.
-* **Počáteční zůstatek období** = počáteční kapitál účtu plus vše realizované
-  před začátkem období (včetně dřívějších vkladů a výběrů).
+* **Počáteční zůstatek období** = počáteční kapitál účtu (první vklad) plus vše
+  realizované před začátkem období (včetně dřívějších vkladů, výběrů a jiných
+  neobchodních pohybů – korekcí, bonusů, úroků).
 * **Profit Factor** = hrubý zisk / hrubá ztráta.
 * **RRR** = průměrný zisk / průměrná ztráta, zobrazeno jako `1 : x`.
 * **Maximální pokles** se počítá z křivky zůstatku jako největší propad od
@@ -372,11 +369,10 @@ spustit-windows.bat        startovací skript pro Windows
 scripts/bootstrap.sh       společná logika startovacích skriptů (macOS + Linux)
 scripts/deploy.cmd         instalace a kompilace mql5/*.mq5 do všech MT5 (Windows)
 scripts/deploy.ps1         vlastní logika instalace, spouští ji deploy.cmd
-mql5/ExportMagicNumbers.mq5  skript pro MT5: export magic numbers do CSV
+mql5/ExportHistory.mq5     skript pro MT5: export historie účtu do ReportHistory-<účet>.csv
 forexreport/
 ├── cli.py                 zpracování argumentů a orchestrace
-├── mt5_parser.py          čtení exportu z MetaTraderu 5
-├── magic.py               načtení magic numbers z CSV a jejich přiřazení k pozicím
+├── mt5_parser.py          načtení CSV ze skriptu ExportHistory, sestavení pozic z obchodů
 ├── periods.py             rozbor a vyhodnocení parametru období
 ├── metrics.py             výpočet obchodních metrik
 ├── charts.py              vykreslení grafů (matplotlib)
@@ -391,14 +387,37 @@ requirements.txt
 
 ## Vstupní soubor
 
-Parser je napsaný obecně – nespoléhá na pevné pozice řádků, ale hledá sekce
-(*Pozice*, *Pokyny*, *Nabídky*, *Výsledky*) a sloupce podle jejich názvů.
-Zvládá českou i anglickou lokalizaci exportu a UTF-16 kódování, ve kterém
-MetaTrader sešity ukládá. Funguje tedy na libovolném souboru
-`ReportHistory-*.xlsx`, nejen na přiloženém vzorku.
+`ReportHistory-<účet>.csv` je v UTF-8 s oddělovačem středník a má dvě části
+oddělené prázdným řádkem – údaje o účtu ve tvaru `klíč;hodnota` a tabulku
+všech obchodů:
 
-Pokud export sekci *Pozice* neobsahuje, aplikace pozice zrekonstruuje párováním
-vstupních a výstupních obchodů ze sekce *Nabídky* metodou FIFO.
+```
+# forex-MT5-report – historie obchodů z MetaTraderu 5 (mql5/ExportHistory.mq5)
+format;1
+login;498754
+name;$15K - Classic - Phase 1
+company;FT Trading Ltd.
+server;FTTrading-Server
+currency;USD
+trade_mode;demo
+margin_mode;Hedge
+balance;15015.27
+exported;2026.11.11 16:05:12
+
+time;deal;order;position;type;entry;symbol;volume;price;sl;tp;commission;fee;swap;profit;magic;comment
+2026.06.30 19:41:46;27520449;0;0;balance;in;;0;0;0;0;0;0;0;15000;0;
+2026.08.05 09:11:45;31810972;43670387;43670387;sell;in;EURCAD;0.86;1.62317;0;0;-2.58;0;0;0;1003;
+2026.08.05 15:55:32;31892364;43755120;43670387;buy;out;EURCAD;0.45;1.61948;1.62508;1.61624;0;0;0;118.4;1003;[sl 1.62508]
+```
+
+* `format` – verze formátu; aplikace odmítne soubor jiné verze.
+* `type` a `entry` – zkrácené názvy typu a směru obchodu z MT5 (`buy`, `sell`,
+  `balance`, `credit`… a `in`, `out`, `inout`, `out_by`).
+* Časy obchodů jsou v čase serveru (stejně jako v terminálu), `exported` je
+  místní čas exportu.
+
+Na účtech typu *Netting* může jeden obchod pozici otočit (`inout`); aplikace
+ho rozdělí na uzavření dosavadní pozice a otevření nové se stejným číslem.
 
 Když ve zvoleném období není žádný uzavřený obchod, vygeneruje se jednostránkový
 report s upozorněním a s informací, jaký rozsah dat soubor obsahuje.

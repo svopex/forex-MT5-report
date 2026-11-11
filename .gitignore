@@ -13,6 +13,9 @@ __pycache__/
 *.pdf
 *.png
 
+# Exporty historie ze skriptu ExportHistory.mq5 (obsahují údaje o účtu)
+ReportHistory-*.csv
+
 # Nastavení Claude Code
 .claude/
 

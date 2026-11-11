@@ -109,8 +109,8 @@ class Metrics:
     trade_results: List[float] = field(default_factory=list)
     positions: List[Position] = field(default_factory=list)
 
-    # Rozpad podle strategie (magic number); plní se jen u metrik celého účtu,
-    # jen s načtenými magic numbers a jen při alespoň MIN_STRATEGIES strategiích
+    # Rozpad podle strategie (magic number); plní se jen u metrik celého účtu
+    # a jen při alespoň MIN_STRATEGIES strategiích
     strategies: List["StrategyMetrics"] = field(default_factory=list)
 
     # ---- odvozené vlastnosti -------------------------------------------------
@@ -188,22 +188,17 @@ class StrategyMetrics:
     Výchozím zůstatkem je počáteční zůstatek účtu, takže zhodnocení i pokles
     v procentech vyjadřují dopad strategie na účet.
 
-    :param magic: magic number (None = neznámé, 0 = ruční obchody)
+    :param magic: magic number (0 = ruční obchody)
     :param metrics: metriky spočtené nad obchody strategie
     """
 
-    magic: Optional[int]
+    magic: int
     metrics: Metrics
 
     @property
     def label(self) -> str:
         """Popisek strategie pro report."""
         return strategy_label(self.magic)
-
-    @property
-    def magic_order(self) -> Tuple[bool, int]:
-        """Klíč řazení podle magic number; neznámé magic number je poslední."""
-        return (self.magic is None, self.magic or 0)
 
     @property
     def group(self) -> GroupStats:
@@ -361,8 +356,8 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     """
     Spočítá všechny metriky reportu za zvolené období.
 
-    Jsou-li k dispozici magic numbers, spočítá navíc metriky pro každou
-    strategii zvlášť (Metrics.strategies).
+    Při více strategiích (magic numbers) v období spočítá navíc metriky
+    pro každou strategii zvlášť (Metrics.strategies).
 
     :param report: načtený export z MT5
     :param period: vyhodnocené období
@@ -370,8 +365,7 @@ def compute_metrics(report: Mt5Report, period: Period) -> Metrics:
     selected = filter_positions(report.positions, period)
     currency = report.account.currency or "USD"
     metrics = _compute(selected, period, _opening_balance(report, period), currency)
-    if report.has_magic:
-        metrics.strategies = _compute_strategies(metrics)
+    metrics.strategies = _compute_strategies(metrics)
     return metrics
 
 
@@ -401,7 +395,7 @@ def _compute_strategies(account: Metrics) -> List[StrategyMetrics]:
 
     :param account: metriky celého účtu za období
     """
-    groups: "OrderedDict[Optional[int], List[Position]]" = OrderedDict()
+    groups: "OrderedDict[int, List[Position]]" = OrderedDict()
     for position in account.positions:
         groups.setdefault(position.magic, []).append(position)
     if len(groups) < MIN_STRATEGIES:
@@ -415,7 +409,7 @@ def _compute_strategies(account: Metrics) -> List[StrategyMetrics]:
         )
         for magic, positions in groups.items()
     ]
-    strategies.sort(key=lambda s: (-s.metrics.net_profit, s.magic_order))
+    strategies.sort(key=lambda s: (-s.metrics.net_profit, s.magic))
     return strategies
 
 

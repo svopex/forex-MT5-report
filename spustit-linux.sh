@@ -5,7 +5,7 @@
 # Bez parametrů se zeptá na vstupní soubor a období:
 #     ./spustit-linux.sh
 # S parametry běží rovnou:
-#     ./spustit-linux.sh ReportHistory-498754.xlsx month=last
+#     ./spustit-linux.sh ReportHistory-498754.csv month=last
 
 set -euo pipefail
 

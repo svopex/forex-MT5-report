@@ -8,7 +8,7 @@ rem
 rem  Priklady:
 rem      spustit-windows.bat
 rem      spustit-windows.bat --month=202608
-rem      spustit-windows.bat ReportHistory-498754.xlsx --day=last --format=png
+rem      spustit-windows.bat ReportHistory-498754.csv --day=last --format=png
 rem ---------------------------------------------------------------------------
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -143,8 +143,7 @@ exit /b 0
 
 :rozpoznej_argument
 rem Podle jednoho argumentu urci, ktery udaj uz uzivatel zadal
-if /i "!ARG:~-5!"==".xlsx" set "MA_SOUBOR=1"
-if /i "!ARG:~-5!"==".xlsm" set "MA_SOUBOR=1"
+if /i "!ARG:~-4!"==".csv" set "MA_SOUBOR=1"
 rem Obdobi - prepinacem i zapisem bez pomlcek
 if /i "!ARG!"=="--all" set "MA_OBDOBI=1"
 if /i "!ARG!"=="all" set "MA_OBDOBI=1"
@@ -173,15 +172,15 @@ if /i "!PREDCHOZI!"=="--output" if /i "!ARG:~-4!"==".pdf" set "MA_FORMAT=1"
 goto :eof
 
 :zeptej_se_na_soubor
-rem Pri jedinem nalezenem sesitu se neptame a pouzijeme ho rovnou
+rem Pri jedinem nalezenem exportu se neptame a pouzijeme ho rovnou
 set /a POCET=0
-for %%F in ("%~dp0*.xlsx") do (
+for %%F in ("%~dp0ReportHistory-*.csv") do (
     set /a POCET+=1
     set "SOUBOR_!POCET!=%%~nxF"
 )
 if %POCET%==0 (
-    echo Chyba: V adresari neni zadny soubor .xlsx.
-    echo Zkopirujte sem export ReportHistory-*.xlsx z MetaTraderu 5.
+    echo Chyba: V adresari neni zadny export ReportHistory-*.csv.
+    echo Vyexportujte historii skriptem ExportHistory v MetaTraderu 5.
     set "NAVRAT=2"
     exit /b 2
 )

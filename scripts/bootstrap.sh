@@ -80,7 +80,7 @@ install_deps() {
         return 0
     fi
 
-    info "Instaluji potřebné knihovny (openpyxl, matplotlib, reportlab) …"
+    info "Instaluji potřebné knihovny (matplotlib, reportlab) …"
     # Aktualizace pipu je jen příjemnost, případné selhání nesmí zastavit instalaci
     "$VENV_DIR/bin/python" -m pip install --quiet --disable-pip-version-check \
         --upgrade pip >/dev/null 2>&1 || true
@@ -105,12 +105,12 @@ open_result() {
     esac
 }
 
-# Zjistí, zda mezi argumenty je vstupní soubor (.xlsx).
+# Zjistí, zda mezi argumenty je vstupní soubor (.csv).
 has_source_arg() {
     local arg
     for arg in "$@"; do
         case "$arg" in
-            *.xlsx|*.XLSX|*.xlsm|*.XLSM) return 0 ;;
+            *.csv|*.CSV) return 0 ;;
         esac
     done
     return 1
@@ -152,12 +152,12 @@ has_format_arg() {
 ask_source() {
     local files=()
     while IFS= read -r line; do files+=("$line"); done < <(
-        find "$PROJECT_DIR" -maxdepth 1 -name '*.xlsx' ! -name '~$*' | sort
+        find "$PROJECT_DIR" -maxdepth 1 -name 'ReportHistory-*.csv' | sort
     )
 
     if [ ${#files[@]} -eq 0 ]; then
-        fail "V adresáři $PROJECT_DIR není žádný soubor .xlsx."
-        echo "Zkopírujte sem export ReportHistory-*.xlsx z MetaTraderu 5 a spusťte skript znovu." >&2
+        fail "V adresáři $PROJECT_DIR není žádný export ReportHistory-*.csv."
+        echo "Vyexportujte historii skriptem ExportHistory v MetaTraderu 5 a spusťte skript znovu." >&2
         return 2
     fi
 

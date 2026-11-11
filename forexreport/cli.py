@@ -2,7 +2,7 @@
 Rozhraní příkazové řádky aplikace.
 
 Použití:
-    python report.py ReportHistory-498754.xlsx year=2026 [-o report.pdf]
+    python report.py ReportHistory-498754.csv year=2026 [-o report.pdf]
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import traceback
 from typing import Optional, Sequence
 
 from . import __version__
-from .magic import MAGIC_FILE_PATTERN, MagicFileError, apply_magic, default_magic_path, load_magic_map
 from .metrics import compute_metrics
 from .mt5_parser import load_report
 from .pdf_report import build_report
@@ -31,12 +30,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         epilog=PERIOD_HELP + """
 
 Na pořadí parametrů nezáleží, období lze zadat oběma způsoby:
-  report.py ReportHistory-498754.xlsx --month=202608
-  report.py --month=202608 ReportHistory-498754.xlsx
-  report.py ReportHistory-498754.xlsx month=202608""",
+  report.py ReportHistory-498754.csv --month=202608
+  report.py --month=202608 ReportHistory-498754.csv
+  report.py ReportHistory-498754.csv month=202608""",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("soubor", help="vstupní soubor ReportHistory-*.xlsx z MetaTraderu 5")
+    parser.add_argument(
+        "soubor",
+        help="vstupní soubor ReportHistory-<účet>.csv ze skriptu ExportHistory v MetaTraderu 5",
+    )
     parser.add_argument(
         "obdobi", nargs="?", default=None,
         help="období reportu zápisem bez pomlček, např. month=202608 (výchozí: all)",
@@ -78,12 +80,6 @@ Na pořadí parametrů nezáleží, období lze zadat oběma způsoby:
         choices=("pdf", "png", "both"),
         help="formát výstupu: pdf (výchozí), png (jeden dlouhý obrázek) "
              "nebo both (obojí)",
-    )
-    parser.add_argument(
-        "--magic", metavar="CSV", default=None,
-        help="soubor s magic numbers ze skriptu mql5/ExportMagicNumbers.mq5 "
-             f"(výchozí: {MAGIC_FILE_PATTERN.format(login='<účet>')} vedle vstupního "
-             "souboru, pokud existuje)",
     )
     parser.add_argument(
         "--dpi", type=int, default=DEFAULT_DPI,
@@ -199,10 +195,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Chyba: vstupní soubor '{args.soubor}' neexistuje.", file=sys.stderr)
         return 2
 
-    if args.magic and not os.path.isfile(args.magic):
-        print(f"Chyba: soubor s magic numbers '{args.magic}' neexistuje.", file=sys.stderr)
-        return 2
-
     try:
         spec = parse_period(period_from_args(args))
     except PeriodError as exc:
@@ -227,27 +219,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             traceback.print_exc()
         return 1
 
-    # Magic numbers: výslovně zadaný soubor, jinak soubor nalezený vedle exportu.
-    # Chyba ve výslovně zadaném souboru je fatální; u nalezeného souboru jen
-    # upozorníme a report vytvoříme bez rozdělení podle strategií.
-    magic_path = args.magic or default_magic_path(args.soubor, report.account.login)
-    if magic_path:
-        try:
-            mapping = load_magic_map(magic_path)
-        except MagicFileError as exc:
-            if args.magic:
-                print(f"Chyba při čtení magic numbers: {exc}", file=sys.stderr)
-                return 1
-            print(f"Upozornění: magic numbers se nenačetly, report bude bez rozdělení "
-                  f"podle strategií. {exc}", file=sys.stderr)
-        else:
-            matched = apply_magic(report, mapping)
-            total = len(report.positions)
-            log(f"Magic numbers: {os.path.basename(magic_path)} · přiřazeno {matched} z {total} pozic")
-            if matched < total:
-                log(f"Upozornění: u {total - matched} pozic magic number v souboru chybí – "
-                    "vyexportujte ho znovu skriptem ExportMagicNumbers.")
-
     try:
         period = resolve_period(spec, [p.close_time for p in report.positions])
     except PeriodError as exc:
@@ -266,7 +237,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Strategie se rozdělují jen při více strategiích v období
         if metrics.strategies:
             log(f"Strategií v období: {len(metrics.strategies)}")
-        elif report.has_magic:
+        else:
             log("V období je jediná strategie – strany podle strategií se nevytvoří.")
 
     try:

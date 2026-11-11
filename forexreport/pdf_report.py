@@ -45,9 +45,6 @@ OVERVIEW_TRADE_LIMIT = 10
 MAIN_CHART_RATIO = 0.665
 LOWER_BAND_HEIGHT = 178.0
 
-# Relativní šířka sloupce Magic v tabulce obchodů
-MAGIC_COLUMN_WEIGHT = 0.074
-
 # Sazba tabulky strategií: nejmenší výška grafů nad ní, místo, které v kartě
 # zaberou odsazení, titulek, podtitulek a hlavička tabulky, a nejmenší výška
 # řádku, na kterou se tabulka smí zhustit
@@ -1013,38 +1010,28 @@ class ReportPdf:
         Sloupce tabulky obchodů: (hlavička, relativní šířka, zarovnání, obsah buňky).
 
         Obsah buňky je funkce pořadového čísla a pozice. Sloupce "Otevřeno"
-        a "Uzavřeno" jsou širší kvůli času včetně vteřin. Sloupec Magic se
-        přidá jen s načtenými magic numbers – jinak by obsahoval samé pomlčky.
+        a "Uzavřeno" jsou širší kvůli času včetně vteřin; magic number se
+        vypisuje surové (0 = ruční obchod).
         """
-        columns = [
-            ("#", 0.035, "right", lambda number, p: (str(number), None)),
-            ("Otevřeno", 0.128, "left",
+        return [
+            ("#", 0.032, "right", lambda number, p: (str(number), None)),
+            ("Otevřeno", 0.118, "left",
              lambda number, p: (datetime_cs(p.open_time, with_seconds=True), None)),
-            ("Uzavřeno", 0.128, "left",
+            ("Uzavřeno", 0.118, "left",
              lambda number, p: (datetime_cs(p.close_time, with_seconds=True), None)),
-            ("Symbol", 0.075, "left", lambda number, p: (p.symbol, None)),
-            ("Směr", 0.055, "left",
+            ("Magic", 0.074, "left", lambda number, p: (str(p.magic), None)),
+            ("Symbol", 0.069, "left", lambda number, p: (p.symbol, None)),
+            ("Směr", 0.051, "left",
              lambda number, p: ("Dlouhá" if p.direction == "buy" else "Krátká", None)),
-            ("Objem", 0.055, "right", lambda number, p: (cs_number(p.volume, 2), None)),
-            ("Otevírací cena", 0.095, "right", lambda number, p: (self._price(p.open_price), None)),
-            ("Zavírací cena", 0.095, "right", lambda number, p: (self._price(p.close_price), None)),
-            ("Provize", 0.065, "right", lambda number, p: (money(p.commission, decimals=2), None)),
-            ("Swap", 0.06, "right", lambda number, p: (money(p.swap, decimals=2), None)),
-            ("Zisk", 0.095, "right", lambda number, p: (money(p.gross_profit, decimals=2), None)),
-            ("Výsledek", 0.09, "right",
+            ("Objem", 0.051, "right", lambda number, p: (cs_number(p.volume, 2), None)),
+            ("Otevírací cena", 0.088, "right", lambda number, p: (self._price(p.open_price), None)),
+            ("Zavírací cena", 0.088, "right", lambda number, p: (self._price(p.close_price), None)),
+            ("Provize", 0.060, "right", lambda number, p: (money(p.commission, decimals=2), None)),
+            ("Swap", 0.056, "right", lambda number, p: (money(p.swap, decimals=2), None)),
+            ("Zisk", 0.088, "right", lambda number, p: (money(p.gross_profit, decimals=2), None)),
+            ("Výsledek", 0.083, "right",
              lambda number, p: (signed_money(p.net_profit, decimals=2), self._pl_color(p.net_profit))),
         ]
-        if self.report.has_magic:
-            # Magic vložíme za čas uzavření a ostatní sloupce poměrně zúžíme,
-            # aby tabulka zůstala stejně široká. Magic number vypisujeme
-            # surové (0 = ruční obchod), pomlčka znamená, že v CSV chybí.
-            total = sum(weight for _, weight, _, _ in columns)
-            scale = (total - MAGIC_COLUMN_WEIGHT) / total
-            columns = [(header, weight * scale, align, cell)
-                       for header, weight, align, cell in columns]
-            columns.insert(3, ("Magic", MAGIC_COLUMN_WEIGHT, "left",
-                               lambda number, p: ("—" if p.magic is None else str(p.magic), None)))
-        return columns
 
     def _sorted_positions(self) -> List[Position]:
         """Obchody období seřazené podle času uzavření."""

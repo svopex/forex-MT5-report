@@ -4,7 +4,7 @@
 # Připraví virtuální prostředí, doinstaluje potřebné knihovny a spustí report.
 # Lze spustit dvojklikem ve Finderu (pak se aplikace zeptá na soubor a období),
 # nebo z Terminálu s parametry:
-#     ./spustit-macos.command ReportHistory-498754.xlsx month=last
+#     ./spustit-macos.command ReportHistory-498754.csv month=last
 
 set -euo pipefail
 

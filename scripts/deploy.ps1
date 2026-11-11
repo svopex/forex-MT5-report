@@ -4,7 +4,7 @@
 # Najde všechny terminály, které mají MetaEditor a datový adresář, do každého
 # zkopíruje mql5\*.mq5 do <data>\MQL5\Scripts\ a skripty tam přeloží.
 # Výchozí hodnotu vstupu InpOutputDir přitom nastaví na adresář projektu,
-# aby skripty ukládaly výstupy (MagicNumbers-*.csv) přímo sem.
+# aby skripty ukládaly výstupy (ReportHistory-*.csv) přímo sem.
 # Úspěšná kompilace končí v logu řádkem "Result: 0 errors, ...".
 #
 # Návratový kód: 0 = vše nasazeno, 1 = žádný terminál nebo chyba kopírování či kompilace.
